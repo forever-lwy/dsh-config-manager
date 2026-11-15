@@ -8,7 +8,7 @@
  * dsh/pnpm；profile 目录用真实临时目录（node:fs），node_modules 落盘 package.json
  * 驱动 hasDshBundlePatch 判定。
  */
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -399,6 +399,9 @@ test('ensureActivationRow: scope 包名 slug 形态正确（@scope/name → pm-s
 
 type SessionCtx = ConstructorParameters<typeof DshSessionStoreFacade>[0]
 
+const sessionFacadeHome = mkdtempSync(join(tmpdir(), 'dsh-cm-session-facade-'))
+after(() => rmSync(sessionFacadeHome, { recursive: true, force: true }))
+
 /** 假的 Cordis ctx：只有 readService 用到的 get(name) 有意义（其余服务一律 undefined）。 */
 function storeCtx(services: Record<string, unknown>): SessionCtx {
   return { get: (name: string) => services[name] ?? null } as unknown as SessionCtx
@@ -456,7 +459,7 @@ test('回退 fork：必须走 DSH 自己的 sessionController.fork（子会话�
     sessions: { fork: storeFork },
     sessionController: { fork: async (request: unknown) => { calls.push(request); return { sessionId: 'child-native' } } },
     workspaceRegistry: { list: () => [workspace] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
 
   assert.deepEqual(await facade.forkSession('parent-1', 42), { childSessionId: 'child-native' })
   assert.deepEqual(calls, [{ sessionId: 'parent-1', atSeq: 42 }], 'atSeq 必须是目标回合前的 inclusive 边界，逐字透传')
@@ -465,7 +468,7 @@ test('回退 fork：必须走 DSH 自己的 sessionController.fork（子会话�
 test('回退 fork：宿主没有 sessionController 时结构化失败（**绝不**退回底层 store fork 造一个不能用、不落盘的会话）', async () => {
   const facade = new DshSessionStoreFacade(storeCtx({
     sessions: { fork: () => ({ id: 'session-1' }) },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await facade.forkSession('parent-1', 3), { error: 'session-controller-unavailable' })
 })
 
@@ -475,7 +478,7 @@ test('回退 fork：子会话必须挂回**原会话所属工作区**（否则�
   const facade = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-1' }) },
     workspaceRegistry: { list: () => [otherWorkspace, parentWorkspace] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
 
   assert.deepEqual(await facade.forkSession('parent-1', 7), { childSessionId: 'child-1' })
   assert.deepEqual(membersOf(parentWorkspace), ['parent-1', 'child-1'], '成员名单必须真的写上（复核档读它）')
@@ -489,7 +492,7 @@ test('回退 fork：原会话自己就不在任何工作区时，按**子会话 
     sessionController: { fork: async () => ({ sessionId: 'child-cwd' }) },
     sessions: { get: (id: string) => (id === 'child-cwd' ? { header: { id, cwd: 'D:/proj/a' } } : undefined) },
     workspaceRegistry: { list: () => [otherDir, project] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger(), async (p) => canonicalPath(p))
+  }), sessionFacadeHome, zhMsg, silentLogger(), async (p) => canonicalPath(p))
 
   assert.deepEqual(
     await facade.forkSession('parent-nowhere', 5),
@@ -507,7 +510,7 @@ test('回退 fork（2026-10-17 真机）：子会话还没进活会话服务 ⇒
     sessions: { get: () => undefined },
     sessionPersistence: { list: async () => [{ header: { id: 'child-stored', cwd: 'D:/proj/a' } }] },
     workspaceRegistry: { list: () => [project] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger(), async (p) => canonicalPath(p))
+  }), sessionFacadeHome, zhMsg, silentLogger(), async (p) => canonicalPath(p))
 
   assert.deepEqual(
     await facade.forkSession('parent-nowhere', 5),
@@ -529,7 +532,7 @@ test('回退 fork（2026-10-17 真机）：子会话 header 读不出 cwd ⇒ �
       },
     },
     workspaceRegistry: { list: () => [project] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger(), async (p) => canonicalPath(p))
+  }), sessionFacadeHome, zhMsg, silentLogger(), async (p) => canonicalPath(p))
 
   assert.deepEqual(await facade.forkSession('parent-1', 5), { childSessionId: 'child-nocwd' })
   assert.deepEqual(membersOf(project), ['child-nocwd'], '父 cwd 与工作区同目录 ⇒ 必须归位（同源事实，不是猜测）')
@@ -571,7 +574,7 @@ test('t10 ③ 档（修复前必红）：cwd 与工作区 path 仅大小写/分�
       // 模拟 DSH 的 realpathNormalize：大小写折叠 + 分隔符统一（真机上还会展开短名）
       resolveByPath: async (p: string) => { resolveCalls.push(p); return canonicalPath(p) === canonicalPath('D:/Progra~1/MyProj') ? project : undefined },
     },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
 
   assert.deepEqual(await facade.forkSession('parent-nowhere', 5), { childSessionId: 'child-canon' })
   assert.deepEqual(resolveCalls, ['d:\\PROGRA~1\\myproj'], 'cwd 必须交给 DSH 的解析器判同一性（裸字符串比较在真机上必然落空）')
@@ -584,7 +587,7 @@ test('t10 ③ 档回落：resolveByPath 不可用 → 双端 realpath + win32 �
     sessionController: { fork: async () => ({ sessionId: 'child-fb' }) },
     sessions: { get: (id: string) => (id === 'child-fb' ? { header: { id, cwd: 'd:\\proj\\a\\' } } : undefined) },
     workspaceRegistry: { list: () => [project] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger(), async (p) => canonicalPath(p))
+  }), sessionFacadeHome, zhMsg, silentLogger(), async (p) => canonicalPath(p))
 
   assert.deepEqual(await facade.forkSession('parent-nowhere', 5), { childSessionId: 'child-fb' })
   assert.deepEqual(membersOf(project), ['child-fb'])
@@ -596,7 +599,7 @@ test('t10 ③ 档：目录不存在 → 失败理由是 directory-missing（具�
     sessionController: { fork: async () => ({ sessionId: 'child-gone' }) },
     sessions: { get: (id: string) => (id === 'child-gone' ? { header: { id, cwd: 'D:/gone' } } : undefined) },
     workspaceRegistry: { list: () => [ghost], resolveByPath: async () => { throw new Error('ENOENT: no such file or directory') } },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await viaResolver.forkSession('parent-nowhere', 1), {
     childSessionId: 'child-gone',
     warning: workspaceAttachWarningOf({ ok: false, reason: 'directory-missing' }),
@@ -607,7 +610,7 @@ test('t10 ③ 档：目录不存在 → 失败理由是 directory-missing（具�
     sessionController: { fork: async () => ({ sessionId: 'child-gone2' }) },
     sessions: { get: (id: string) => (id === 'child-gone2' ? { header: { id, cwd: 'D:/gone' } } : undefined) },
     workspaceRegistry: { list: () => [ghost] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger(), async () => { throw new Error('ENOENT') })
+  }), sessionFacadeHome, zhMsg, silentLogger(), async () => { throw new Error('ENOENT') })
   assert.deepEqual(await viaRealpath.forkSession('parent-nowhere', 1), {
     childSessionId: 'child-gone2',
     warning: 'workspace-attach-failed:directory-missing',
@@ -619,7 +622,7 @@ test('t10 ③ 档：目录存在但没有工作区认领 ⇒ no-workspace-for-cw
     sessionController: { fork: async () => ({ sessionId: 'child-loose' }) },
     sessions: { get: (id: string) => (id === 'child-loose' ? { header: { id, cwd: 'D:/loose' } } : undefined) },
     workspaceRegistry: { list: () => [workspaceFixture({ id: 'ws-1', path: 'D:/proj/a', sessionIds: [] })], resolveByPath: async () => undefined },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await facade.forkSession('parent-nowhere', 1), {
     childSessionId: 'child-loose',
     warning: 'workspace-attach-failed:no-workspace-for-cwd',
@@ -631,7 +634,7 @@ test('t10 复核：attach 没抛错但 list() 里仍不含子会话 ⇒ 按失�
   const facade = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-half' }) },
     workspaceRegistry: { list: () => [halfWritten] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await facade.forkSession('parent-1', 3), {
     childSessionId: 'child-half',
     warning: 'workspace-attach-failed:verify-failed',
@@ -645,24 +648,24 @@ test('t10 理由可区分：attachSession 缺失（形状不符）/ registry 未
   const shape = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-shape' }) },
     workspaceRegistry: { list: () => [shapeOnly] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await shape.forkSession('parent-1', 1), { childSessionId: 'child-shape', warning: 'workspace-attach-failed:attach-session-missing' })
 
   const unregistered = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-noreg' }) },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await unregistered.forkSession('parent-1', 1), { childSessionId: 'child-noreg', warning: 'workspace-attach-failed:registry-unavailable' })
 
   const listThrows = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-list' }) },
     workspaceRegistry: { list: () => { throw new Error('registry not ready') } },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await listThrows.forkSession('parent-1', 1), { childSessionId: 'child-list', warning: 'workspace-attach-failed:registry-list-failed' })
 
   const attachThrows = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-throw' }) },
     workspaceRegistry: { list: () => [workspaceFixture({ id: 'ws-1', path: 'D:/proj/a', sessionIds: ['parent-1'], reject: 'workspace write failed' })] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await attachThrows.forkSession('parent-1', 1), { childSessionId: 'child-throw', warning: 'workspace-attach-failed:attach-rejected' })
 })
 
@@ -671,7 +674,7 @@ test('t10 要求 D：官方 fork 已归位（子会话已在成员名单里）�
   const facade = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-official' }) },
     workspaceRegistry: { list: () => [already] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await facade.forkSession('parent-1', 1), { childSessionId: 'child-official' })
   assert.deepEqual(membersOf(already), ['parent-1', 'child-official'], '不重复写：attachSession 里的 reject 一次都没被触发')
 })
@@ -683,7 +686,7 @@ test('回退 fork：直接命中的工作区写失败后，仍按同目录兜底
     sessionController: { fork: async () => ({ sessionId: 'child-fallback' }) },
     sessions: { get: (id: string) => (id === 'child-fallback' ? { header: { id, cwd: 'D:/proj/a' } } : undefined) },
     workspaceRegistry: { list: () => [broken, sameDir] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger(), async (p) => canonicalPath(p))
+  }), sessionFacadeHome, zhMsg, silentLogger(), async (p) => canonicalPath(p))
 
   assert.deepEqual(await facade.forkSession('parent-1', 9), { childSessionId: 'child-fallback' })
   assert.deepEqual(membersOf(sameDir), ['child-fallback'], '第一档抛错必须换下一档继续找，而不是直接判失败')
@@ -701,7 +704,7 @@ test('回退 fork：子代理会话沿 parentSession 上溯祖先的工作区（
     sessionController: { fork: async () => ({ sessionId: 'child-lineage' }) },
     sessions: { get: (id: string) => (headers[id] === undefined ? undefined : { header: headers[id] }) },
     workspaceRegistry: { list: () => [workspace] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
 
   assert.deepEqual(await facade.forkSession('sub-1', 4), { childSessionId: 'child-lineage' })
   assert.deepEqual(membersOf(workspace), ['main-1', 'child-lineage'], '血缘档命中（子会话 cwd 刻意对不上任何工作区，排除第三档）')
@@ -710,7 +713,7 @@ test('回退 fork：子代理会话沿 parentSession 上溯祖先的工作区（
 test('回退 fork：挂不上工作区**不影响回退本身**（结构化 warning 带具体理由，绝不抛、绝不假装已归位）', async () => {
   const noRegistry = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-2' }) },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(
     await noRegistry.forkSession('parent-1', 3),
     { childSessionId: 'child-2', warning: 'workspace-attach-failed:registry-unavailable' },
@@ -719,7 +722,7 @@ test('回退 fork：挂不上工作区**不影响回退本身**（结构化 warn
   const refusing = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => ({ sessionId: 'child-3' }) },
     workspaceRegistry: { list: () => [workspaceFixture({ sessionIds: ['parent-1'], reject: 'workspace write failed' })] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(
     await refusing.forkSession('parent-1', 3),
     { childSessionId: 'child-3', warning: 'workspace-attach-failed:attach-rejected' },
@@ -753,7 +756,7 @@ test('t16：官方 fork 抛 session/workspace-attach-failed（细节带 childId�
     sessionController: { fork: async () => { throw remoteAttachFailure('child-kept', 'ws-1') } },
     sessions: { get: (id: string) => (id === 'child-kept' ? { header: { id, cwd: 'D:/proj/a' } } : undefined) },
     workspaceRegistry: { list: () => [workspace], resolveByPath: async () => workspace },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
 
   assert.deepEqual(
     await facade.forkSession('parent-1', 7),
@@ -773,7 +776,7 @@ test('t16：fork 抛错但**取不到 childId** ⇒ 保持现状报 fork-failed�
       },
     },
     workspaceRegistry: { list: () => [] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   const noDetailsOutcome = await noDetails.forkSession('parent-1', 1)
   assert.deepEqual(noDetailsOutcome, { error: 'attach failed without details' })
   assert.equal('childSessionId' in noDetailsOutcome, false, '取不到 childId 时不许返回子会话（那就是假装成功）')
@@ -781,7 +784,7 @@ test('t16：fork 抛错但**取不到 childId** ⇒ 保持现状报 fork-failed�
   // ② 完全不是这个错误码（例如域未就绪）
   const other = new DshSessionStoreFacade(storeCtx({
     sessionController: { fork: async () => { throw new Error('gateway/internal: composeAgent failed') } },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(await other.forkSession('parent-1', 1), { error: 'gateway/internal: composeAgent failed' })
 })
 
@@ -790,7 +793,7 @@ test('t16：兜底归位失败 ⇒ 结果仍含 childSessionId + warning（works
     sessionController: { fork: async () => { throw remoteAttachFailure('child-lost', 'ws-1') } },
     sessions: { get: (id: string) => (id === 'child-lost' ? { header: { id, cwd: 'D:/loose' } } : undefined) },
     workspaceRegistry: { list: () => [workspaceFixture({ id: 'ws-1', path: 'D:/proj/a', sessionIds: [] })], resolveByPath: async () => undefined },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
 
   assert.deepEqual(await facade.forkSession('parent-1', 1), {
     childSessionId: 'child-lost',
@@ -846,7 +849,7 @@ test('F-1 parentRelations：旧（legacy）形状 list() 元素仍能解析出�
         { id: 'child-2', parentSessionId: 'parent-1', origin: 'subagent' },
       ],
     },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
 
   const relations = await facade.parentRelations()
   assert.deepEqual(
@@ -867,7 +870,7 @@ test('F-1 parentRelations：新（handle）形状元素解析结果与 legacy �
         { header: { id: 'parent-1', origin: 'user' } },
       ],
     },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.deepEqual(
     [...(await facade.parentRelations())],
     [['child-1', { parent: 'parent-1', subagent: true }]],
@@ -877,26 +880,26 @@ test('F-1 parentRelations：新（handle）形状元素解析结果与 legacy �
 test('F-1 parentRelations：元素形状一个都认不出 → 抛错（绝不返回空 Map 冒充「没有父子关系」）', async () => {
   const facade = new DshSessionStoreFacade(storeCtx({
     sessionPersistence: { list: async () => [{ totallyDifferent: 1 }, { shape: 'v9' }] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   await assert.rejects(() => facade.parentRelations(), /sessionPersistence/)
 });
 
 test('F-1 parentRelations：列举抛错 → 抛错（不吞成空 Map，避免被 5 s TTL 缓存放大）', async () => {
   const facade = new DshSessionStoreFacade(storeCtx({
     sessionPersistence: { list: async () => { throw new Error('corrupt session log') } },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   await assert.rejects(() => facade.parentRelations(), /corrupt session log/)
 });
 
 test('F-1 parentRelations：空列举 = 确实没有会话 → 空 Map（不抛错）', async () => {
   const facade = new DshSessionStoreFacade(storeCtx({
     sessionPersistence: { list: async () => [] },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
   assert.equal((await facade.parentRelations()).size, 0)
 });
 
 test('F-1 parentRelations：宿主未接线 sessionPersistence → 空 Map（确定性事实，不抛错）', async () => {
-  const facade = new DshSessionStoreFacade(storeCtx({}), 'C:/home/.dsh', zhMsg, silentLogger())
+  const facade = new DshSessionStoreFacade(storeCtx({}), sessionFacadeHome, zhMsg, silentLogger())
   assert.equal((await facade.parentRelations()).size, 0)
 });
 
@@ -906,7 +909,7 @@ test('F-1 reindexSessionHeader：legacy 形状下仍能命中，并把**原样 h
   const facade = new DshSessionStoreFacade(storeCtx({
     sessionPersistence: { append: () => {}, list: async () => [{ id: 'other' }, rawHeader] },
     workspaceRegistry: { indexHeader: (header: unknown) => { indexed.push(header) } },
-  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  }), sessionFacadeHome, zhMsg, silentLogger())
 
   assert.equal(await facade.reindexSessionHeader('s-1'), true, '旧形状必须命中（恒 false 就是 F-1 事故）')
   assert.equal(indexed.length, 1)
