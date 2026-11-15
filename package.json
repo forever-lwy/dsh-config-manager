@@ -91,7 +91,6 @@
     "bundle": "tsdown",
     "watch": "tsdown --watch",
     "clean": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\"",
-    "prepare": "npm run build",
     "check": "npm run typecheck && npm run typecheck:tests",
     "release": "node scripts/release.mjs"
   },

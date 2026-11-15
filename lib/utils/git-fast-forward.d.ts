@@ -1,0 +1,23 @@
+/**
+ * git 快进拉取的参数与判定（sync 与 market 共用唯一实现）。
+ *
+ * 为什么不用 `git pull --ff-only`：它是「fetch 写 FETCH_HEAD + 读 FETCH_HEAD 合并」的两步动作。
+ * 两个消费者并发驱动同一个工作副本时 FETCH_HEAD 会留下多行 for-merge 记录，随后**每个** pull 都以
+ * `fatal: Cannot fast-forward to multiple branches.`（exit 128）失败（本机 5 并发实测 5 个全败）；
+ * 这条失败落在自动同步的 intent journal 里就会被判「不可证明」⇒ 落盘 durable SAFE MODE。
+ * 显式 refspec fetch + 显式远端跟踪分支 merge 完全不读 FETCH_HEAD（同样 5 并发实测全成功），
+ * 语义与 ff-only pull 一致：能快进就快进，不能快进就报「历史分叉」。
+ */
+/**
+ * `git fetch` 参数：只更新 origin/<branch> 这个远端跟踪引用，不写 FETCH_HEAD。
+ *
+ * `flags` 是给调用方补的拉取姿态（如 `--filter=blob:none`/`--no-tags`），必须排在 `origin` 之前：
+ * git 只认「子命令后、URL 前」的选项，放到 refspec 之后会被当成 refspec 解析。
+ */
+export declare function fastForwardFetchArgs(branch: string, flags?: readonly string[]): string[];
+/** `git merge` 参数：快进到显式远端跟踪分支（不依赖 upstream 配置，也不读 FETCH_HEAD） */
+export declare function fastForwardMergeArgs(branch: string): string[];
+/** 远端还没有同名分支（全新空仓库 / 分支被改名）：调用方按「无 upstream」同姿态静默跳过 */
+export declare function isMissingRemoteRefError(text: string): boolean;
+/** `rev-parse --abbrev-ref HEAD` 的输出 → 分支名；detached HEAD（'HEAD'）返回空串 */
+export declare function parseCurrentBranch(stdout: string): string;

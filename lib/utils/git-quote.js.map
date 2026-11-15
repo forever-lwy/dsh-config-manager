@@ -1,0 +1,1 @@
+{"version":3,"file":"git-quote.js","sourceRoot":"","sources":["../../src/utils/git-quote.ts"],"names":[],"mappings":"AAAA;;;;;GAKG;AACH,sDAAsD;AACtD,MAAM,UAAU,aAAa,CAAC,KAAa;IACzC,OAAO,QAAQ,CAAC,IAAI,CAAC,KAAK,CAAC,CAAC,CAAC,CAAC,IAAI,KAAK,CAAC,OAAO,CAAC,IAAI,EAAE,KAAK,CAAC,GAAG,CAAC,CAAC,CAAC,KAAK,CAAC;AAC1E,CAAC"}

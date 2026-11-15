@@ -1,0 +1,60 @@
+import type { SectionId } from '../schema/types.ts';
+import type { SyncTransportType } from './sync-config.ts';
+export declare const SYNC_HISTORY_FILE = "sync-history.json";
+export declare const SYNC_HISTORY_SCHEMA_VERSION = 1;
+/** 自动同步历史保留上限 */
+export declare const AUTOSYNC_HISTORY_KEEP = 200;
+/** 自动同步执行记录（§3.7 AutosyncHistoryEntry） */
+export interface AutosyncHistoryEntry {
+    /** 触发该次运行的同步通道（git / webdav；旧记录缺省 undefined） */
+    transport?: SyncTransportType;
+    /** 执行方向 */
+    direction: 'pull' | 'push' | 'both';
+    status: 'success' | 'skipped' | 'failed' | 'partial';
+    /** 跳过原因（冲突项 / 缺失依赖 / Install / 错误 / 无远端 / 网络） */
+    skipReason?: string;
+    /** 被跳过、需要人工确认的分区 id（双向冲突，或风险分级 medium/high 而被扣下的项） */
+    conflictedSections?: SectionId[];
+    /** 本次自动合并实际写入的分区 */
+    appliedSections?: SectionId[];
+    /** 本次 push 产生的快照 id（direction 含 push 时） */
+    pushedSnapshotId?: string;
+    /** 本次 pull 来源快照 id */
+    pulledSnapshotId?: string;
+    /** failed 时的错误摘要（脱敏） */
+    error?: string;
+    /**
+     * issue #136：本轮下行的用户可见告警（被保住的脱敏叶子 / 被扣下的叶级冲突）。
+     * 与 status 同看：有告警就不可能是一条「纯成功、什么都做了」的记录。
+     */
+    warnings?: string[];
+    /** issue #136：被保留待裁决的叶级冲突所在分区。 */
+    heldSections?: SectionId[];
+    /** 连续失败 3 次通知时间（ISO-8601 UTC） */
+    notifiedAt?: string;
+    /** 本次触发时的连续失败计数 */
+    failureCountAtRun: number;
+    /** 记录创建时间（ISO-8601 UTC） */
+    createdAt: string;
+}
+/** sync-history.json 文件结构 */
+export interface SyncHistoryFile {
+    schemaVersion: number;
+    autosyncEntries: AutosyncHistoryEntry[];
+    updatedAt: string;
+}
+/** 读取同步历史；文件不存在 → 空列表（schemaVersion=1）。损坏 JSON 抛错。 */
+export declare function readSyncHistory(dir: string): Promise<SyncHistoryFile>;
+/** 追加一条自动同步执行记录（升序），裁剪到 AUTOSYNC_HISTORY_KEEP 条，原子写。 */
+export declare function appendAutosyncEntry(dir: string, entry: AutosyncHistoryEntry, now?: () => Date): Promise<void>;
+/**
+ * 给指定 createdAt 的自动同步记录补 notifiedAt 并落盘（issue #105）。
+ *
+ * 为什么不再借道 autosync-config：此前「连续失败 ≥ 3」的通知文案被写进 lastRunMessage，
+ * 与「本轮错误原文」抢同一个字段 —— 界面据此渲染出与真实状态无关的通知文案。
+ * 通知的持久痕迹只留历史 entry 的 notifiedAt；未命中记录返回 false（不写文件）。
+ */
+export declare function markAutosyncNotified(dir: string, createdAt: string, notifiedAt: string, opts?: {
+    now?: () => Date;
+    readHistory?: (dir: string) => Promise<SyncHistoryFile>;
+}): Promise<boolean>;

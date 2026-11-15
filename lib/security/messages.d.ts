@@ -1,0 +1,30 @@
+import type { MsgParams } from '../core/msg-types.ts';
+export declare const zh: {
+    readonly 'security.encryptionPasswordEmpty': '加密密码不能为空';
+    readonly 'security.secretsBlobTooSmall': 'secrets.enc 体积过小（截断或损坏）';
+    readonly 'security.unknownFileMagic': '未知文件格式 magic "{magic}"，不是本插件产物';
+    readonly 'security.unsupportedSecretsVersion': '不支持的 secrets.enc 版本 {version}';
+    readonly 'security.invalidEncryptionParams': 'manifest 加密参数非法或不受支持';
+    readonly 'security.encryptionParamsMismatch': 'secrets.enc 与 manifest 加密参数不一致（可能被篡改）';
+    readonly 'security.keyDerivationFailed': '密钥派生失败: {reason}';
+    readonly 'security.decryptAuthFailed': '解密认证失败：密码错误或密文被篡改';
+    readonly 'security.archiveBlobTooSmall': '加密备份容器体积过小（截断或损坏）';
+    readonly 'security.unsupportedArchiveVersion': '不支持的加密备份版本 {version}';
+    readonly 'security.archiveParamsMismatch': '加密备份参数不一致（可能被篡改）';
+    readonly 'security.checksumsMustBeJsonObject': 'checksums.json 必须是 JSON 对象';
+    readonly 'security.checksumsTooManyEntries': 'checksums.json 条目数 {count} 超过上限 {max}';
+    readonly 'security.checksumsDangerousKey': 'checksums.json 含危险键 "{path}"，已拒绝';
+    readonly 'security.checksumsIllegalPath': 'checksums.json 含非法相对路径 "{path}"';
+    readonly 'security.checksumsNotSha256': 'checksums.json["{path}"] 不是合法的 SHA-256 hex';
+    readonly 'security.checksumMismatch': '"{path}" (hash 不符)';
+    readonly 'security.checksumMissing': '"{path}" (缺失)';
+    readonly 'security.scanDepthExceeded': '扫描深度 {depth} 超过上限 {max}';
+    readonly 'security.circularReference': '检测到循环引用，无法扫描（路径 {path}）';
+    readonly 'security.vaultUnsafePath': 'vault: 非法敏感文件路径 "{path}"';
+    readonly 'security.zipTargetOutOfBounds': '解压目标越界: {name}';
+    readonly 'security.zipExecutableEntry': '条目 "{name}" 是潜在可执行文件，本插件不会执行它';
+    readonly 'security.zipEntryNotRegularFile': '解压产物不是普通文件: {rel}';
+};
+export declare const en: Record<keyof typeof zh, string>;
+/** 本域翻译器：key 受目录约束（拼错键 = 编译错误），语言按 engineMsg 的活语言解析。 */
+export declare function securityMsg(key: keyof typeof zh, params?: MsgParams): string;
