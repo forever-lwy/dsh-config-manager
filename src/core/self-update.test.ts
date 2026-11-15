@@ -12,9 +12,9 @@ test('planSelfUpdate：合法请求产出钉住精确版本的 argv 与可复制
   assert.equal(plan.ok, true);
   if (!plan.ok) return;
   assert.equal(plan.version, '0.1.70');
-  assert.deepEqual(plan.argv, ['add', 'dsh-config-manager@0.1.70']);
-  assert.equal(plan.command, 'dsh plugin --profile web add dsh-config-manager@0.1.70');
-  assert.equal(selfUpdateSpec('0.1.70'), 'dsh-config-manager@0.1.70');
+  assert.deepEqual(plan.argv, ['add', '@forever-lwy/dsh-config-manager@0.1.70']);
+  assert.equal(plan.command, 'dsh plugin --profile web add @forever-lwy/dsh-config-manager@0.1.70');
+  assert.equal(selfUpdateSpec('0.1.70'), '@forever-lwy/dsh-config-manager@0.1.70');
 });
 
 test('planSelfUpdate：版本 / 档案 / 安装来源逐条拒绝，各带专属码', () => {
@@ -72,10 +72,10 @@ test('runSelfUpdate：成功 → needsRestart，argv 原样交给官方通道', 
   assert.deepEqual(out, {
     ok: true,
     version: '0.1.70',
-    command: 'dsh plugin --profile web add dsh-config-manager@0.1.70',
+    command: 'dsh plugin --profile web add @forever-lwy/dsh-config-manager@0.1.70',
     needsRestart: true,
   });
-  assert.deepEqual(calls[0], ['P', 'web', ['add', 'dsh-config-manager@0.1.70'], undefined, undefined]);
+  assert.deepEqual(calls[0], ['P', 'web', ['add', '@forever-lwy/dsh-config-manager@0.1.70'], undefined, undefined]);
 });
 
 test('runSelfUpdate：安装失败 / 超时 / 中止一律如实失败（绝不当成功）', async () => {

@@ -1039,7 +1039,7 @@ export function toPersistedState(state: StoreState): PersistedState {
     encrypt: c.encrypt,
     includeSecrets: c.includeSecrets,
     deletePlugins: c.deletePlugins, // issue 132：用户配置、非敏感，必须落盘
-    selectedSnapshotId: c.selectedSnapshotId,
+    selectedSnapshotId: '', // Historical selection applies only to the current operation.
     // 快照列表按值复制，避免落盘对象与运行时切片共享可变数组
     snapshots: [...c.snapshots],
     loadingSnapshots: c.loadingSnapshots === true, // issue #59：远端当下诊断，不落盘（落盘只会留下陈旧告警）
@@ -1705,7 +1705,7 @@ export class RunStore {
               : parsed.sync.byChannel?.[ch]
             return {
               ...defaultChannelSyncState(),
-              ...persisted,
+              ...persisted, selectedSnapshotId: '',
               encryptPassword: '',
               encryptPasswordConfirm: '',
               decryptPassword: '',

@@ -1,3 +1,5 @@
+> **forever-lwy fork**: `@forever-lwy/dsh-config-manager`. Source lives on `master`; v* tags build the precompiled `release` branch. With `release` as the repository default, install `github:forever-lwy/dsh-config-manager` and update through dshmarket. Uninstall the unscoped upstream package before installing this fork. Host entry ids and storage keys are retained.
+
 # 🎒 DSH Config Manager
 
 [![npm version](https://img.shields.io/npm/v/dsh-config-manager?label=npm)](https://www.npmjs.com/package/dsh-config-manager)

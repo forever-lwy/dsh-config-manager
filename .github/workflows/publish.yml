@@ -15,6 +15,7 @@ on:
 
 jobs:
   publish:
+    if: github.repository == 'xiajiajun516/dsh-config-manager'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # needed to create the GitHub Release (assets + notes)

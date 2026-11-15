@@ -6,7 +6,7 @@
  * —— 行是整行写回的，行内没有粒度。
  *
  * 本模块是那条「最后一个能拒绝写入」的纯逻辑：比对导入值与本机当前行，把「被脱敏剥空」的
- * 叶子换回本机值；只有调用方显式声明逐行确认（`confirmed`）才允许真的写空。
+ * 叶子换回本机值；声明过脱敏或名称属于密钥字段的叶子始终保留；其它未知空值仍可逐行确认清空。
  *
  * 两条分支（issue #136 C 的载荷字段决定）：
  *  - `redactedPaths` 存在（新载荷）：只保护**声明过的**路径，精确、可解释；
@@ -15,6 +15,8 @@
  *
  * 纯函数：不读盘、不打日志、不抛错；返回值不含任何值本身（只有路径），可直接进报告。
  */
+
+import { isSensitiveFieldName } from '../security/secret-scanner.ts';
 
 /** 路径段（对象键或数组下标）。 */
 type Segment = string | number;
@@ -26,7 +28,7 @@ export interface PatchSecretGuardInput {
   localRaw: unknown;
   /** 载荷声明的剥空路径（行内相对，如 `raw.mcp.args.token`）；缺省 = 未知（旧载荷）。 */
   redactedPaths?: readonly string[] | undefined;
-  /** 调用方已拿到对该行的**逐行显式确认** → 允许写空。 */
+  /** 调用方逐行确认；仅允许清空未声明脱敏的非密钥字段。 */
   confirmed: boolean;
 }
 
@@ -150,6 +152,15 @@ export function applyPatchSecretGuard(input: PatchSecretGuardInput): PatchSecret
       const rel = segs[0] === 'raw' ? segs.slice(1) : segs;
       candidates.push({ segs: rel, declared: true });
     }
+    // An incomplete redaction list must not turn an empty secret field into a deletion.
+    const found: Segment[][] = [];
+    collectSuspects(importedRaw, localRaw, [], found);
+    const known = new Set(candidates.map((candidate) => formatPath(candidate.segs)));
+    for (const segs of found) {
+      if (!known.has(formatPath(segs)) && segs.some((seg) => typeof seg === 'string' && isSensitiveFieldName(seg))) {
+        candidates.push({ segs, declared: false });
+      }
+    }
   }
 
   const kept: string[] = [];
@@ -163,7 +174,9 @@ export function applyPatchSecretGuard(input: PatchSecretGuardInput): PatchSecret
     // 绝不因为声明了路径就把远端真实新值挡掉（issue #136 验收 3）。
     if (importedVal === '' || importedVal === undefined) {
       const rel = formatPath(['raw', ...cand.segs]);
-      if (confirmed) cleared.push(rel);
+      // A known redaction is an absent secret, even when the rest of the row is accepted.
+      const secretField = cand.segs.some((seg) => typeof seg === 'string' && isSensitiveFieldName(seg));
+      if (confirmed && !cand.declared && !secretField) cleared.push(rel);
       else {
         kept.push(rel);
         raw = setAt(raw, cand.segs, localVal);

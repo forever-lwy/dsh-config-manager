@@ -180,6 +180,8 @@ export interface PatchLine {
   file: string;
   lineId: string;
   raw: unknown;
+  /** Source syntax: insert members add entries; top-level rows override existing entries. */
+  operation?: 'insert' | 'update';
   /**
    * 本行 `raw` 里**被脱敏剥空**的叶子路径（行内相对，如 `raw.mcp.args.token`），issue #136 C。
    *

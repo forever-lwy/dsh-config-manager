@@ -664,3 +664,14 @@ $ node --test "tests/conformance/*.test.ts"             -> # pass 18  # fail 0
 2. **P1**：同一种冲突连着出现**只留一条**历史。签名 = 通道 + status + direction + skipReason + 排序后的 conflictedSections/appliedSections + error（`src/sync/autosync-repeat.ts` 的 `repeatHistorySignature()`）；`success`/`failed` 与带 `pushedSnapshotId`/`pulledSnapshotId` 的轮次**恒返回 null**（真推进必须逐条留痕，空轮逐条记录是 2026-11-09 就定下的可见性）。去重时仍刷新 `lastRunAt/lastRunStatus/lastRunSkipCount` 与 `lastRunHistoryId`（保留上一条真实 id）。守卫：连续三轮同一冲突 → `getEntries().length === 1`，换一句 error → 2；成功/失败轮照旧逐条。
 3. **P2**：冲突也落盘。`SyncEngine.recordPendingMerge()`（实现下沉到 `src/sync/pending-merge.ts`，只做纯状态写入：不构造 `SyncApplyPlan`、不碰本机配置、不动祖先副本）取 `lastMergedRemoteSnapshotId`，远端 id 未知或分区为空 → 不写（没有远端 id 的待裁决会每轮重置 `since`，界面永远说不清挂了多久）；推送成功侧 `recordBaseline` 带 `pendingMerge: null` 收口。`/sync/status` 只回 `{ sections, since }`，**绝不回 `remoteSnapshotId`**；首页「待裁决」行整行是 `<button>`，点击经 `src/client/sync/merge-request.ts` 的一次性信号跳到同步页并拉起 `runSyncSmart()`（信号不进 run-store：否则要进持久化白名单、旧存档迁移与刷新重放都会出问题）。
 4. **口径**：只做 P1 不做 P2 = 安静地卡住（历史不再刷，但用户依然无处可点）；只做 P2 不做 P1 = 入口有了，历史仍被同一句话占满。
+
+
+## 2026-11-16 forever-lwy：Web 到桌面端的启动补丁与密钥保护
+
+排查会话报告：已有宿主行被导入成 insert，安装超时的 bundle 仍写入激活配置。源码确认 `analyzeImport` 只查用户层，`applyItem` 把 Create 直接映射成 insert；文件重建只识别本文件布局，漏掉 bundle 继承的 id。
+
+修复保留 `PatchLine.operation`，以目标已有行定位写入层；宿主通过当前安装的 `dsh-app-boot` 合并 bundle、profile、home 三层，在原子写入前检查重复 id、缺模块名、变更模块不可解析与覆盖目标缺失。候选拒写时文件字节不变，适配器报告 warning；安装失败或跳过时不启用对应配置。`src/utils/dsh-patch-startup.test.ts` 使用 rc.3 实际合并器和随包 bundle 验证。
+
+脱敏密钥空值即使整行确认也保留；相同端点的 provider 只有在导入引用既未配置、也无解密值或补录值时，才保留本机已配置引用。历史快照选择不跨刷新保存，普通同步复位到最新。Windows 安装子进程无显式代理时读取已启用的静态系统代理；不改系统设置，读取有上限。自动同步的凭据策略不变，含密钥迁移仍需手动加密导出。
+
+SDK 对齐 rc.3 后，会话复验首先使用运行时锚点树；插件自身依赖树仅能在同一权威根下回退，避免相同格式版本但不同 codec 实现覆盖显式目标。相关回归在 `session-verify.test.ts`。

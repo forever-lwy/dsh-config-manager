@@ -98,6 +98,13 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **Web 配置迁到桌面端后可正确保留宿主条目**：已有插件的配置不会再变成重复新增，安装失败的插件暂缓启用；写入前检查完整启动配置，不通过时保留原文件。
+  **Web-to-desktop imports preserve existing host entries**: configuration overrides no longer create duplicate plugins, failed installations defer activation, and invalid startup configurations leave the original file intact.
+- **同步保留本机仍可用的密钥**：脱敏空值不再清掉已有密钥，同一网关缺少新密钥时保留本机引用；历史快照选择不再跨刷新残留，常规同步回到最新快照。
+  **Sync preserves working local credentials**: redacted blanks keep existing secrets, a gateway keeps its local binding when no replacement key is available, and historical snapshot choices reset to latest after refresh.
+- **Windows 插件安装沿用已启用的系统代理**：没有代理环境变量时读取本机静态 HTTP 代理，并传给安装子进程。
+  **Windows plugin installation uses the enabled system proxy**: when proxy environment variables are absent, the local static HTTP proxy is passed to installation subprocesses.
+
 - **自动同步的「待裁决」终于能点进去处理，也不再每分钟记一条同样的记录**：远端有别的设备推过的新内容时，首页那条记录整行可点、直接进同步页的合并确认，同步设置里的自动同步一栏同时写明是哪几个分区在等你裁决、从什么时候开始等；同一种冲突连着出现只保留一条记录（以前是每 60 秒写一条，200 条历史被同一句话占满），真正推进成功或失败的轮次照旧逐条留痕。
   **"Needs decision" entries from auto sync are now actionable, and the same conflict is logged once**: when another device has pushed newer content, the home row is clickable and opens the merge confirmation on the sync page, while the auto-sync section says which sections are waiting and since when; a repeated identical conflict keeps a single entry (it used to add one every 60 seconds, filling the 200-entry history with the same sentence), and rounds that really push or fail are still logged one by one.
 - **自动同步的后台轮询不再每轮重跑一次本机全部内容的打包**：只在远端真的有新内容时才重新检查本机改动，省掉每分钟一次的重复导出（本机源插件多时这一轮要跑几十秒，机器会明显发烫、变卡）；本机改动仍由「本地改动即时同步」与定时兜底负责。

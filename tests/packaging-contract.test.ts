@@ -24,6 +24,7 @@ const repoRoot = path.resolve(import.meta.dirname, '..');
 
 interface PackageJson {
   version?: string;
+  engines?: { dsh?: string };
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
@@ -142,7 +143,7 @@ test('exports["./schema"] 指向 lib/schema/index.{js,d.ts}（而非纯类型产
  *   改前（^0.1.0-rc.6）+ runtime 0.2.0-rc.1 → INCOMPATIBLE（14 条 peer 全中）；
  *   改后 + runtime 0.1.5-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 → 全部 COMPATIBLE。
  */
-const DSH_PEER_RANGE = '>=0.1.0-rc.6 <0.3.0-0';
+const DSH_PEER_RANGE = '>=0.1.0-rc.6';
 
 /**
  * DSH peer 条数期望值（**恒定**，不是下界）。
@@ -154,7 +155,8 @@ const DSH_PEER_RANGE = '>=0.1.0-rc.6 <0.3.0-0';
  */
 const DSH_PEER_COUNT = 16;
 
-test('P-3: 全部 @deepseek-ai/dsh* peer 都用显式上下界（不得回退到带预发布版的 caret）', () => {
+test('P-3: DSH peers use open lower bounds and the host version gate stays unrestricted', () => {
+  assert.equal(pkg.engines?.dsh, '*');
   const dshPeers = Object.entries(pkg.peerDependencies ?? {})
     .filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'));
   assert.equal(
@@ -163,16 +165,12 @@ test('P-3: 全部 @deepseek-ai/dsh* peer 都用显式上下界（不得回退到
     `DSH peer 应恒为 ${DSH_PEER_COUNT} 条，实际 ${dshPeers.length}: ${dshPeers.map(([n]) => n).join(', ')}`,
   );
   for (const [name, range] of dshPeers) {
-    assert.equal(
-      range,
-      DSH_PEER_RANGE,
-      `${name} 的范围必须是 ${DSH_PEER_RANGE}（当前 ${range}）：带预发布版的 caret 上界是 <0.2.0-0，会把整条 0.2 线挡在兼容闸之外（issue #53）`,
-    );
+    assert.match(range, /^>=\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, `${name}: ${range}`);
   }
 });
 
-test('P-3: 区间形态 = 显式下界 + `-0` 上界（caret/tilde 一律不匹配）', () => {
-  const shape = /^>=\d+\.\d+\.\d+-[0-9A-Za-z.-]+ <\d+\.\d+\.\d+-0$/;
+test('P-3: compatibility ranges have a lower bound without an upper bound', () => {
+  const shape = /^>=\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/;
   assert.match(DSH_PEER_RANGE, shape, '必须是「显式下界 + -0 上界」形态');
   assert.ok(!/[\^~]/.test(DSH_PEER_RANGE), '区间不得使用 caret / tilde');
   // 变异验证：被禁形态必须真的不匹配，否则这条规则形同虚设

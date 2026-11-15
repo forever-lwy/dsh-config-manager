@@ -81,7 +81,8 @@ test('MC-5 暂存 GC：保留期边界内不删（严格大于才删）', async 
     await writeFile(p, 'x');
     const at = new Date(now - MARKET_TMP_RETENTION_MS);
     await utimes(p, at, at);
-    const removed = await pruneStagedMarketZips(dir, MARKET_TMP_RETENTION_MS, now);
+    const storedAt = (await stat(p)).mtimeMs;
+    const removed = await pruneStagedMarketZips(dir, MARKET_TMP_RETENTION_MS, storedAt + MARKET_TMP_RETENTION_MS);
     assert.deepEqual(removed, []);
     assert.ok((await stat(p)).size >= 0);
   });

@@ -62,6 +62,7 @@ export interface PatchLayerLine {
   file: string;
   lineId: string;
   raw: unknown;
+  operation?: 'insert' | 'update';
 }
 
 export interface PatchLayerReadResult {
@@ -103,7 +104,7 @@ export async function locatePatchLineLayer(
   lineId: string,
 ): Promise<string> {
   for (const file of patchLayerRels(profile)) {
-    let rows: { lineId: string; raw: unknown }[];
+    let rows: Awaited<ReturnType<PatchFileFacade['readPatchLines']>>;
     try {
       rows = await patchFile.readPatchLines(file);
     } catch {
@@ -132,7 +133,7 @@ export async function readEffectivePatchLines(
   const failures: { file: string; reason: string }[] = [];
   const seen = new Set<string>();
   for (const file of patchLayerRels(profile)) {
-    let rows: { lineId: string; raw: unknown }[];
+    let rows: Awaited<ReturnType<PatchFileFacade['readPatchLines']>>;
     try {
       rows = await patchFile.readPatchLines(file);
     } catch (err) {
@@ -143,7 +144,7 @@ export async function readEffectivePatchLines(
       // 高优先级层已给出该行 → 低优先级层的同名行被覆盖（不导出被覆盖的旧值）
       if (seen.has(row.lineId)) continue;
       seen.add(row.lineId);
-      lines.push({ file, lineId: row.lineId, raw: row.raw });
+      lines.push({ file, lineId: row.lineId, raw: row.raw, ...(row.operation !== undefined ? { operation: row.operation } : {}) });
     }
   }
   return { lines, failures };

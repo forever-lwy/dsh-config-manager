@@ -20,10 +20,10 @@
 import { compareVersionStrings, isConcreteVersion } from './validator.ts'
 
 /** 被检查的 npm 包名（= package.json 的 name；单点常量，勿在别处再写一份） */
-export const PLUGIN_NPM_PACKAGE = 'dsh-config-manager'
+export const PLUGIN_NPM_PACKAGE = '@forever-lwy/dsh-config-manager'
 
 /** registry 的 latest 端点（体积约数 KB，只取版本号） */
-export const NPM_LATEST_URL = `https://registry.npmjs.org/${PLUGIN_NPM_PACKAGE}/latest`
+export const NPM_LATEST_URL = 'https://raw.githubusercontent.com/forever-lwy/dsh-config-manager/release/package.json'
 
 /** 网络超时（ms）：界面在等，宁可快速失败也不让按钮长时间转圈 */
 export const UPDATE_CHECK_TIMEOUT_MS = 5000

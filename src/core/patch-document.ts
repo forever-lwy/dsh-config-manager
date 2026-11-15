@@ -41,6 +41,11 @@ export class PatchPromoteRefusedError extends Error {
   }
 }
 
+/** The candidate was rejected before writing; other import items may still proceed. */
+export class PatchStartupInvalidError extends Error {
+  constructor(message: string) { super(message); this.name = 'PatchStartupInvalidError'; }
+}
+
 interface SlotState {
   raw: unknown;
   inInsert: boolean;
@@ -86,7 +91,7 @@ export function describePatchDocument(doc: unknown): { insertIds: string[]; topL
  *
  * `doc` 是已解析的原文档（非数组视为空文档）；顺序按原布局保留，新增项追加在尾部。
  */
-export function planPatchDocument(doc: unknown, changes: readonly PatchLineChange[]): PatchDocumentPlan {
+export function planPatchDocument(doc: unknown, changes: readonly PatchLineChange[], inheritedIds: ReadonlySet<string> = new Set()): PatchDocumentPlan {
   const state = new Map<string, SlotState>();
   const layout: Slot[] = [];
 
@@ -118,7 +123,8 @@ export function planPatchDocument(doc: unknown, changes: readonly PatchLineChang
     }
     const previous = state.get(change.lineId);
     // 归属只由**原文档**决定：更新一条既有 insert 成员不会把它搬到顶层；新增才按动作分流
-    const inInsert = previous !== undefined ? previous.inInsert : change.action === 'insert';
+    const inInsert = inheritedIds.has(change.lineId) ? false
+      : previous !== undefined ? previous.inInsert : change.action === 'insert';
     state.set(change.lineId, { raw: change.raw, inInsert });
   }
 
@@ -146,8 +152,12 @@ export function planPatchDocument(doc: unknown, changes: readonly PatchLineChang
   };
 
   for (const slot of layout) {
-    if (slot.kind === 'row') emitRow(slot.id);
-    else emitBlock(slot.ids);
+    if (slot.kind === 'row') {
+      if (!state.get(slot.id)?.inInsert) emitRow(slot.id);
+    } else {
+      emitBlock(slot.ids);
+      for (const id of slot.ids) if (state.get(id)?.inInsert === false) emitRow(id);
+    }
   }
 
   // 新写入、且原文档布局里没有的 id：insert 动作进块，update 动作保持旧的 upsert 语义（顶层行）

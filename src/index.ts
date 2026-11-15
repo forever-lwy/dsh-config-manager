@@ -46,7 +46,8 @@ import { promisify } from 'node:util'
 
 import type { Context } from '@deepseek-ai/cordis'
 import * as dshSettings from '@deepseek-ai/dsh-settings'
-import type { SettingsDescriptor, SettingsProvider } from '@deepseek-ai/dsh-settings'
+import type SettingsProvider from '@deepseek-ai/dsh-settings'
+import type { SettingsDescriptor } from '@deepseek-ai/dsh-settings'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // Type-only: pull the Cordis Context augmentations (webServer / workspaceRegistry)
@@ -97,8 +98,9 @@ import { ImportUserSkippedError, type ConfigAdapter, type CredentialsFacade, typ
 import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
 import { planSelfUpdate, runSelfUpdate, type SelfUpdateOutcome } from './core/self-update.ts'
 import { createAdapters } from './adapters/index.ts'
-import { describePatchDocument, describePatchLayoutDrift, planPatchDocument, promotedTopLevelIds } from './core/patch-document.ts'
-import { isPatchLayerRel, profilePatchRel, readEffectivePatchLines, USER_PATCH_FILE } from './core/patch-layers.ts'
+import { DshPatchFileFacade } from './utils/dsh-patch-file.ts'
+export { DshPatchFileFacade } from './utils/dsh-patch-file.ts'
+import { profilePatchRel, readEffectivePatchLines } from './core/patch-layers.ts'
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
 import { ENCRYPTED_CONTAINER_CODE, createEncryptionProvider, readContainerKind, encryptArchive } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
@@ -106,7 +108,7 @@ import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks,
 import { projectKeyOf, sessionIdKey } from './core/session-select.ts'
 import { PROJECT_KEY_RE, readLogCwdFromBytes, rewriteSessionLogDir } from './utils/session-log.ts'
 import { probeSessionFormats, resolveSessionFormatVersion } from './utils/session-format.ts'
-import { describePatchYamlError, dumpPatchDocument, loadPatchDocument } from './utils/patch-yaml.ts'
+import { loadPatchDocument } from './utils/patch-yaml.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { removeTree } from './utils/remove-tree.ts'
 import { isENOENT } from './utils/guards.ts'
@@ -184,10 +186,10 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-export const PLUGIN_VERSION = '0.9.0'
+export const PLUGIN_VERSION = '0.9.1'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
-const PLUGIN_NAME = 'dsh-config-manager'
+const PLUGIN_NAME = '@forever-lwy/dsh-config-manager'
 
 /**
  * Star 引导弹窗指向的 GitHub 仓库（用户引导点 Star 的目标）。
@@ -1616,170 +1618,6 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
   }
 }
 
-/**
- * Patch-file facade：patch 的**两层**都在 home 根内 ——
- *   - 用户（home）层：`$DSH_HOME/cordis.patch.yml`
- *   - profile 层：`$DSH_HOME/profiles/<name>/cordis.patch.yml`
- *
- * `file` 参数是**相对 homeDir 的 POSIX 路径**（issue #71；层身份的定义见 core/patch-layers.ts）。
- * 改造前这里是「拿文件名字符串当枚举」的两个分支，而两个分支比较的是同一个字面量
- * `'cordis.patch.yml'` —— profile 分支永远不可达，于是 profile 层的 MCP / prompts 行
- * 在备份里凭空消失（用户报告的「备份不到外壳 mcp」）。现在按路径解析，两层都能读写。
- *
- * YAML 侧一律走 `utils/patch-yaml.ts` 的 **DSH 方言**（issue #75）：`!!js` 必须能读写往返，
- * 且原文件解析不了时**拒绝覆盖**（读不出来 ≠ 空文档）。
- */
-export class DshPatchFileFacade implements PatchFileFacade {
-  private readonly homeDir: string
-  private readonly profile: string
-  private readonly msg: MsgFunc
-
-  constructor(homeDir: string, profile: string, msg: MsgFunc = zhMsg) {
-    this.homeDir = homeDir
-    this.profile = profile
-    this.msg = msg
-  }
-
-  /**
-   * 层路径 → 绝对路径。
-   *
-   * 只接受**已知的层路径**（用户层 / 本 profile 的 profile 层），且解析结果必须落在 home 根内：
-   * 调用方传进来的是快照里存的字符串，跨机器恢复时不能让它变成任意路径写。
-   * 本 profile 之外的 profile 层同样拒绝 —— 一个档案的备份不该写另一个档案的 patch。
-   */
-  private patchPath(file: string): string {
-    const rel = file.replace(/\\/g, '/')
-    const allowed = rel === USER_PATCH_FILE || (isPatchLayerRel(rel) && rel === profilePatchRel(this.profile))
-    if (!allowed) {
-      throw new Error(this.msg('host.patchUnsupported', {
-        user: USER_PATCH_FILE,
-        profile: profilePatchRel(this.profile),
-        file,
-      }))
-    }
-    const abs = resolve(this.homeDir, rel)
-    if (!isSameOrChild(abs, this.homeDir)) {
-      throw new Error(this.msg('host.patchUnsupported', {
-        user: USER_PATCH_FILE,
-        profile: profilePatchRel(this.profile),
-        file,
-      }))
-    }
-    return abs
-  }
-
-  async readPatchLines(file: string): Promise<{ lineId: string; raw: unknown }[]> {
-    const p = this.patchPath(file)
-    let text: string
-    try {
-      text = await fs.readFile(p, 'utf8')
-    } catch (err) {
-      // 真不存在 = 「按需创建、本来就没有」→ 空层（既有语义）。
-      // 其余 errno（EACCES / EBUSY / …）**必须上抛**：读不到 ≠ 没有；静默返回空会让这一层的
-      // patch 行在导出/同步里无声消失（t23 口径；readEffectivePatchLines 的 failures 通道会转成
-      // 可见告警，三个适配器都会展示）。
-      if (isENOENT(err)) return []
-      throw new Error(this.msg('host.patchUnreadable', { file, reason: describePatchYamlError(err) }), { cause: err })
-    }
-    let doc: unknown
-    try {
-      doc = loadPatchDocument(text)
-    } catch (err) {
-      // 解析失败同样上抛（issue #75）：`!!js` 这类 DSH 方言一旦读不出来，返回 [] 就等于把用户
-      // 手写的整层配置从导出/同步里抹掉（比「报错」糟得多）。
-      throw new Error(this.msg('host.patchUnreadable', { file, reason: describePatchYamlError(err) }), { cause: err })
-    }
-    if (!Array.isArray(doc)) return []
-    const lines: { lineId: string; raw: unknown }[] = []
-    for (const item of doc) {
-      if (item === null || typeof item !== 'object') continue
-      const obj = item as Record<string, unknown>
-      const insert = obj['insert']
-      if (Array.isArray(insert)) {
-        for (const entry of insert) {
-          if (entry === null || typeof entry !== 'object') continue
-          const id = (entry as Record<string, unknown>)['id']
-          if (typeof id === 'string' && id !== '') lines.push({ lineId: id, raw: entry })
-        }
-        continue
-      }
-      const id = obj['id']
-      if (typeof id === 'string' && id !== '') lines.push({ lineId: id, raw: obj })
-    }
-    return lines
-  }
-
-  async applyPatchChanges(
-    file: string,
-    changes: { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove' }[],
-  ): Promise<void> {
-    const p = this.patchPath(file)
-
-    // 1. Load the current document (the ordered table itself is built by planPatchDocument).
-    //
-    // 读不出来的既有内容**绝不能当作空文档**（issue #75 的数据丢失点）：重建后的文件只包含
-    // 本次写入的行，等于把用户手写的其余行整段删掉。三种情况分开处理：
-    //   - 真不存在（ENOENT）→ 空文档（首次创建，既有语义）；
-    //   - 存在但读不到（EACCES/EBUSY/…）→ 抛错，不改写；
-    //   - 存在但解析不了（含未知方言 / YAML 本身有错）→ 抛错，不改写。
-    let existing: string | null = null
-    try {
-      existing = await fs.readFile(p, 'utf8')
-    } catch (err) {
-      if (!isENOENT(err)) {
-        throw new Error(this.msg('host.patchRefuseClobber', { file, reason: describePatchYamlError(err) }), { cause: err })
-      }
-    }
-    let doc: unknown
-    if (existing !== null && existing.trim() !== '') {
-      try {
-        doc = loadPatchDocument(existing)
-      } catch (err) {
-        throw new Error(this.msg('host.patchRefuseClobber', { file, reason: describePatchYamlError(err) }), { cause: err })
-      }
-    }
-
-    // 2. Rebuild through core/patch-document.ts (issue #133): the two shapes are **not**
-    //    equivalent on the host side. A top-level `- id: X` row *overrides* entry X and is
-    //    dropped with `patch: entry "X" not found` when X does not exist; only an
-    //    `- insert:` block member *adds* entries. Emitting every row top-level therefore
-    //    turned one update into "every insert-only entry (MCP servers, most notably) is
-    //    gone after restart".
-    const plan = planPatchDocument(doc, changes)
-    const text = '# rewritten by dsh-config-manager import (original comments not preserved)\n'
-      + dumpPatchDocument(plan.items)
-
-    // 3. Post-write structure self-check, before anything touches the disk: re-parse the
-    //    text we just serialized and require both id sets to match the plan item by item.
-    //    A serializer or dialect change that flattens or swallows insert blocks stops here
-    //    (zero write) instead of silently degrading every patch row to an override.
-    const drift = describePatchLayoutDrift(plan, describePatchDocument(loadPatchDocument(text)))
-    if (drift !== null) {
-      throw new Error(this.msg('host.patchSemanticDrift', { file, detail: drift }))
-    }
-
-    // 4. 跨层提升守卫（issue #133）：待写的顶层 id 若是**另一层**的 insert 成员，写下去就从
-    //    「新增」变成「覆盖」（宿主查不到则丢弃）。对侧读不出来/解析不了只跳过守卫 —— 读护栏
-    //    已在各自层报错，损坏的兄弟文件不该永久阻塞本层写入。
-    const other = file === USER_PATCH_FILE ? profilePatchRel(this.profile) : USER_PATCH_FILE
-    const promoted = promotedTopLevelIds(await this.readPatchDocQuietly(other), plan.topLevelIds)
-    if (promoted.length > 0) {
-      throw new Error(this.msg('host.patchRefusePromote', { file, ids: promoted.join(', ') }))
-    }
-
-    await atomicWriteFile(p, text)
-  }
-
-  /** 读另一层并解析；读不到/解析不了 → undefined（跨层守卫 fail-open，见 promotedTopLevelIds）。 */
-  private async readPatchDocQuietly(file: string): Promise<unknown> {
-    try {
-      return loadPatchDocument(await fs.readFile(resolve(this.homeDir, file), 'utf8'))
-    } catch {
-      return undefined
-    }
-  }
-}
-
 /** File facade over $DSH_HOME, confined to the home root. */
 export class DshFileSystemFacade implements FileSystemFacade {
   private readonly homeDir: string
@@ -2113,7 +1951,19 @@ export class ConfigManagerHostContext implements HostContext {
     }
     this.settings = new DshSettingsFacade(ctx)
     this.credentials = new DshCredentialsFacade(ctx)
-    this.patchFile = new DshPatchFileFacade(homeDir, profile, this.msg)
+    this.patchFile = new DshPatchFileFacade(homeDir, profile, this.msg, async () => {
+      const { composeEntries, loadProfileDirectory, resolveBundleDir } = await import('@deepseek-ai/dsh-app-boot')
+      const anchor = installAnchor ?? dshPackageJsonCandidates(homeDir, profile).find((path) => existsSync(path))
+      if (anchor === undefined) throw new Error(this.msg('host.patchStartupUnavailable'))
+      const loaded = loadProfileDirectory(PLUGIN_NAME, this.profileDir!, anchor, { userLayer: false })
+      return {
+        entries: composeEntries(loaded.layers.map((layer) => layer.patches)),
+        compose: (layers, warn) => composeEntries(layers as Parameters<typeof composeEntries>[0], warn),
+        available: (name) => {
+          try { resolveBundleDir(PLUGIN_NAME, name, anchor, this.profileDir!); return true } catch { return false }
+        },
+      }
+    })
     this.plugins = new DshPluginsFacade(homeDir, profile, this.patchFile, undefined, this.msg)
     this.workspace = new DshWorkspaceFacade(ctx, this.msg)
     this.fs = new DshFileSystemFacade(homeDir, this.msg)
@@ -4102,7 +3952,7 @@ export function apply(ctx: Context, config?: Config): void {
     return
   }
   // 端口就绪 → 重新自报一次心跳（其它实例的「运行中」徽章与端口信息靠它；token 永不落盘）。
-  webPort.value = webServer.port
+  webPort.value = webServer.port ?? null
   // F-2：宿主自请求走这个端口（探测/代理 DSH 自己的 /api/session.export）；routeEnv 的
   // sessionExportPort 是**活 getter**（读 host.webPort），所以这里赋值对已构造好的路由表同样生效、
   // 无需重建；但必须早于注册（否则首次探测拿到 undefined 会如实降级）。端口变化只有重启才会发生。

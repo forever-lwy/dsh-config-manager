@@ -39,7 +39,7 @@ import type {
  * 所以这里做**结构化窄化**；两边一旦漂移，`command-rollback.test.ts` 的编译期断言会红。
  */
 export type CommandResult =
-  | { readonly kind: 'success'; readonly text?: string; readonly sourceEventSeq?: number }
+  | { readonly kind: 'success'; readonly text?: string }
   | { readonly kind: 'error'; readonly text: string }
 
 /** 命令名（无前导斜杠）与别名。 */

@@ -13,6 +13,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { normalizePlatform } from './platform-paths.ts';
 import { sqliteCapability } from './sqlite.ts';
@@ -43,6 +44,19 @@ async function tmpRoot(tag: string): Promise<string> {
 
 async function supportsSqlite(): Promise<boolean> {
   return (await sqliteCapability()).available;
+}
+
+/** Other test workers share the system temp directory; allow their in-flight reads to finish. */
+async function assertNoNewPlaintextDirs(before: string[]): Promise<void> {
+  const baseline = new Set(before);
+  let pending = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('dcm-trae-db-') && !baseline.has(n));
+  const deadline = Date.now() + 3000;
+  while (pending.length > 0 && Date.now() < deadline) {
+    await delay(25);
+    const current = new Set(await fs.readdir(os.tmpdir()));
+    pending = pending.filter((n) => current.has(n));
+  }
+  assert.deepEqual(pending, [], 'plaintext directories created during the test must be removed');
 }
 
 /** 造一个真实明文 SQLite 库（页面大小默认 4096，会话 2 条） */
@@ -206,8 +220,7 @@ test('s2 四类坏输入各给稳定码，且不抛未捕获异常、不留半�
     assert.equal(bigOut.problem?.detail, 'page-size-mismatch');
 
     // 四次失败都不得留下半截明文：临时目录集合必须回到原样
-    const after = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('dcm-trae-db-'));
-    assert.deepEqual(after.sort(), before.sort());
+    await assertNoNewPlaintextDirs(before);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -237,8 +250,7 @@ test('s3 解密产物是 node:sqlite 可只读打开的明文库，且临时目�
     // 读盘层自己造的一次性目录必须在结束后消失（明文不留在用户可见位置）
     const outcome = await readTraeEncryptedDatabase(enc, { env: envOf(), platform: HOST });
     assert.equal(outcome.sessions.length, 2);
-    const after = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('dcm-trae-db-'));
-    assert.deepEqual(after.sort(), before.sort());
+    await assertNoNewPlaintextDirs(before);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

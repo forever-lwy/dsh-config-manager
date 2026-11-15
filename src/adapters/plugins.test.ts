@@ -1109,7 +1109,7 @@ test('#136/A 守卫：分区级裁决（decidedBy: section）不算逐行确认 
   assert.equal(written.disabled, true, '同行的非剥空字段照常写入');
 });
 
-test('#136/A 守卫：显式逐行确认（decidedBy: item）才允许真的写空，且确认事实进报告', async () => {
+test('explicit row confirmation does not clear a declared redacted secret', async () => {
   const dst = makeContext('linux', '/home/bob', 'web');
   dst.patchFile.lines.set('line-a', {
     lineId: 'line-a',
@@ -1127,8 +1127,8 @@ test('#136/A 守卫：显式逐行确认（decidedBy: item）才允许真的写�
   assert.ok(applied.message?.includes('raw.config.apiKey'), `告警应带字段路径: ${applied.message}`);
   assert.equal(
     (dst.patchFile.lines.get('line-a')?.raw as { config: { apiKey: string } }).config.apiKey,
-    '',
-    '显式逐行确认后才允许清空',
+    'sk-LOCAL-PLAINTEXT-136',
+    '接受整行配置仍应保留被脱敏的密钥',
   );
 });
 

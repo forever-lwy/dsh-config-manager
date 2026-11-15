@@ -909,15 +909,15 @@ test('t17: byChannel 从 SYNC_CHANNELS 派生 —— s3/gist 的镜像可持久�
   // ③ 新通道的**非敏感**设置确实写进了 sessionStorage
   const text = raw()
   assert.ok(text !== null, 'patch 后已同步持久化')
-  assert.ok(text.includes('snap-s3'), 's3 通道的选中快照应进入 sessionStorage')
-  assert.ok(text.includes('snap-gist'), 'gist 通道的选中快照应进入 sessionStorage')
+  assert.ok(!text.includes('snap-s3'), '历史快照选择不跨刷新残留')
+  assert.ok(!text.includes('snap-gist'), '历史快照选择不跨刷新残留')
 
   // ④ 跨刷新往返（新实例 + 同存储 = 模拟刷新）
   const restored = new RunStore({ storage }).getSnapshot().sync.byChannel
-  assert.equal(restored.s3.selectedSnapshotId, 'snap-s3', 's3 通道的镜像刷新后恢复')
+  assert.equal(restored.s3.selectedSnapshotId, '', '刷新后默认使用最新快照')
   assert.equal(restored.s3.sessionsLimit, 7, 's3 通道的会话上限刷新后恢复')
   assert.deepEqual(restored.s3.syncSections, ['settings'], 's3 通道的勾选刷新后恢复')
-  assert.equal(restored.gist.selectedSnapshotId, 'snap-gist', 'gist 通道的镜像刷新后恢复')
+  assert.equal(restored.gist.selectedSnapshotId, '', '刷新后默认使用最新快照')
   assert.deepEqual(restored.gist.syncSections, ['skills'], 'gist 通道的勾选刷新后恢复')
 })
 
@@ -991,7 +991,7 @@ test('t17: 持久化产物经哨兵搜索证明不含任何密钥（含云端点
   }
 
   // ⑤ 正向对照：同一通道的**非敏感**设置确实落盘（证明本用例不是空转）
-  assert.ok(persistedJson.includes('snap-xyz'), '非敏感通道设置仍照常持久化')
+  assert.ok(persistedJson.includes('syncSections'), '非敏感通道设置仍照常持久化')
 })
 
 test('低频面板: 同步/市场/快照切片与当前面板刷新往返恢复（敏感字段清空）', () => {
@@ -1063,7 +1063,7 @@ test('低频面板: 同步/市场/快照切片与当前面板刷新往返恢复�
   assert.equal(st.sync.channel, 'webdav')
   assert.equal(st.sync.byChannel.webdav.syncMode, 'advanced', 'webdav 通道模式恢复')
   assert.deepEqual(st.sync.byChannel.webdav.syncSections, ['settings', 'plugins'], 'webdav 通道勾选恢复')
-  assert.equal(st.sync.byChannel.webdav.selectedSnapshotId, 'snap-xyz')
+  assert.equal(st.sync.byChannel.webdav.selectedSnapshotId, '')
   // 持久化切片按原样恢复（旧载荷里 git 是 'default'）；同步面板 loadStatus 会归一到
   // advanced（勾选集合即同步范围），下次保存即以 advanced 落盘。
   assert.equal(st.sync.byChannel.git.syncMode, 'default', 'git 通道独立（照原样恢复持久化值）')
@@ -1146,7 +1146,7 @@ test('低频面板: 旧版顶层 syncMode 载荷 → 迁移为 git 通道的 byC
   assert.deepEqual(st.sync.byChannel.git.syncSections, ['settings'], '旧顶层勾选迁移到 git 通道')
   assert.equal(st.sync.byChannel.git.encrypt, true)
   assert.equal(st.sync.byChannel.git.encryptPassword, '', '迁移后加密密码仍强制清空')
-  assert.equal(st.sync.byChannel.git.selectedSnapshotId, 'snap-old')
+  assert.equal(st.sync.byChannel.git.selectedSnapshotId, '')
   assert.equal(st.sync.byChannel.webdav.syncMode, 'advanced', 'webdav 通道保持缺省（恒 advanced）')
 })
 

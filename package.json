@@ -1,6 +1,6 @@
 {
-  "name": "dsh-config-manager",
-  "version": "0.9.0",
+  "name": "@forever-lwy/dsh-config-manager",
+  "version": "0.9.1",
   "license": "MIT",
   "description": "Backup, restore, export, import, migrate and sync your DeepSeek Harness (DSH) configuration: settings, plugins, MCP servers, skills, agent presets and workspaces. One-click migration to another machine. DSH 配置一键备份、恢复、导出、导入、迁移与同步插件。",
   "icon": "./icon.svg",
@@ -26,10 +26,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xiajiajun516/dsh-config-manager.git"
+    "url": "git+https://github.com/forever-lwy/dsh-config-manager.git"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": "*"
   },
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -63,7 +64,6 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-ui-settings"
       ],
@@ -91,28 +91,30 @@
     "bundle": "tsdown",
     "watch": "tsdown --watch",
     "clean": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\"",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "check": "npm run typecheck && npm run typecheck:tests",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "js-yaml": "^5.4.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-agent-presets": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-client-connection": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-commands": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-credentials": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-home-paths": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-host-plugin-inventory": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-settings": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6 <0.3.0-0",
+    "@deepseek-ai/dsh-agent-presets": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-app-boot": ">=0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-connection": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-commands": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-credentials": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-home-paths": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-host-plugin-inventory": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-settings": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
@@ -124,9 +126,6 @@
       "optional": true
     },
     "@deepseek-ai/dsh-client-locale": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-runtime": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-primitives": {
@@ -170,28 +169,34 @@
     },
     "react-dom": {
       "optional": true
+    },
+    "@deepseek-ai/dsh-app-boot": {
+      "optional": true
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-commands": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-credentials": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-plugin-inventory": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-scope": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-timeout": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-workspace": "^0.1.0-rc.6",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-app-boot": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-base": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-connection": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-locale": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-commands": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-host-plugin-inventory": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-timeout": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-web-app": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-workspace": "0.2.2-rc.3",
     "@radix-ui/react-dialog": "^1.3.1",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.6.5",

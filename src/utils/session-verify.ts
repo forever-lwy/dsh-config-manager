@@ -550,21 +550,6 @@ async function resolveCatalog(options: SessionVerifyOptions, headerVersion: unkn
   }
   const installedVersion = authority.version;
 
-  // ① 裸模块（第一顺位）：已装插件自己依赖树里的那一份
-  const bare = await importBareCatalog();
-  if (bare === undefined) {
-    note('bare-module', 'import-failed');
-  } else {
-    const root = bareCatalogRoot();
-    if (root === undefined) {
-      note('bare-module', 'no-version-anchor');
-    } else {
-      const picked = pickCandidate(bare, root, children, headerVersion, installedVersion, 'bare-module');
-      if (picked.ok) return picked.resolution;
-      note('bare-module', picked.code);
-    }
-  }
-
   // ②③④ 候选链与权威版本解析**同源同序**（anchorPlans 是唯一那份计划表，B3/F1）：
   // 显式 candidates → anchor；否则 install-anchor → env-anchor → runtime-anchor → profiles-tree。
   const plans: { label: string; root: string }[] = [];
@@ -606,6 +591,18 @@ async function resolveCatalog(options: SessionVerifyOptions, headerVersion: unkn
     const picked = pickCandidate(mod, plan.root, children, headerVersion, installedVersion, label, via);
     if (picked.ok) return picked.resolution;
     note(label, picked.code);
+  }
+
+  // A plugin's dependency tree must never override an explicit host/runtime anchor.
+  // Bare resolution is only a fallback within the very same authoritative tree.
+  const bareRoot = bareCatalogRoot();
+  if (bareRoot !== undefined && seenRoots.has(bareRoot)) {
+    const bare = await importBareCatalog();
+    if (bare !== undefined) {
+      const picked = pickCandidate(bare, bareRoot, children, headerVersion, installedVersion, 'bare-module');
+      if (picked.ok) return picked.resolution;
+      note('bare-module', picked.code);
+    }
   }
 
   // 全部候选都不匹配时：只要任一候选卡在「静态 catalog 过不了 v3→v4 边界」，最终结论就是 children-required

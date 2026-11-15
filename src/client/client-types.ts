@@ -3,16 +3,21 @@
  * 其余组件只从 `../client-types.ts` 引用，避免类型散落与误用值导入。
  *
  * p3 构建前需安装的依赖（见 docs/architecture/client-dependencies.md）：
- *   - @deepseek-ai/dsh-client-runtime（ClientContext 声明合并）
+ *   - @deepseek-ai/cordis + ui-slots（宿主内置的 ClientContext 表面）
  *   - @deepseek-ai/dsh-client-locale（ctx.locale 声明合并）
  *   - @deepseek-ai/dsh-client-ui-settings（settings.section SlotMap 声明合并）
  *   - @deepseek-ai/dsh-client-ui-slots（SlotMap / LocaleNamespaceMap / TranslateNS）
  *   - @deepseek-ai/cordis（Context 基础类型）
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { Context } from '@deepseek-ai/cordis'
+import type { SlotCore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 
-export type { ClientContext }
+/** The slot runtime is bundled by DSH; its former standalone package is retired. */
+export type ClientContext = Context & {
+  slots: Pick<SlotCore, 'register' | 'spec'> & {
+    inject(key: string, callback: () => (() => void) | Iterable<() => void>): () => void
+  }
+}
 export type { TranslateNS }
 
 /** 本插件 Client 半的注入业务面：每个 settings.section 注册项都拿到同一个 api 实例 */

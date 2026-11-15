@@ -27,7 +27,7 @@ import type { Plugin } from 'rolldown'
 import { transform as transformCss } from 'lightningcss'
 
 /** Loader id must match the package name (dsh-ssh uses "@linxin666/dsh-ssh"). */
-const LOADER_ID = 'dsh-config-manager'
+const LOADER_ID = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).name as string
 
 /** Virtual-module prefix for compiled CSS Modules. */
 const CSS_VIRTUAL_PREFIX = '\0config-manager-css:'
@@ -126,7 +126,7 @@ export default defineConfig({
   outExtensions: ({ format }) => (format === 'cjs' ? { js: '.js', dts: '.d.ts' } : undefined),
   banner: [
     'window.__ModuleLoader__.load({',
-    '\tid: "dsh-config-manager",',
+    `\tid: ${JSON.stringify(LOADER_ID)},`,
     '\tfactory: (require) => {',
     '\t\tvar module = { exports: {} };',
     '\t\tvar exports = module.exports;',

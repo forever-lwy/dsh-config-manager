@@ -1025,6 +1025,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
    * snapshotId 缺省 = 用远端最新快照（快照行选过才传具体 id）。
    */
   const runSync = async (snapshotId?: string): Promise<void> => {
+    patchChannel({ selectedSnapshotId: snapshotId ?? '' })
     // 清理旧的差异确认会话（避免残留临时 ZIP / 同 key 冲突）
     if (state.confirmSession !== null) {
       try { await api.cancel(state.confirmSession.syncSessionId) } catch { /* 尽力清理 */ }

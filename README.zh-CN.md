@@ -1,3 +1,5 @@
+> **forever-lwy 修复版**：包名为 `@forever-lwy/dsh-config-manager`。源码在 `master`，构建产物由 v* 标签触发 Actions 发布到 `release`。默认分支设为 `release` 后，以 `github:forever-lwy/dsh-config-manager` 安装或在 dshmarket 更新。旧无 scope 包需先在界面卸载，再安装本包；宿主行 id 和存储键沿用。
+
 # 🎒 DSH Config Manager
 
 [![npm version](https://img.shields.io/npm/v/dsh-config-manager?label=npm)](https://www.npmjs.com/package/dsh-config-manager)

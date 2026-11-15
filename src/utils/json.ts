@@ -91,3 +91,5 @@ export function deepClone<T>(value: T, maxDepth: number = DEFAULT_MAX_JSON_DEPTH
   if (depth > maxDepth) throw new JsonDepthError();
   return JSON.parse(JSON.stringify(value)) as T;
 }
+/** JSON-compatible values shared by the core without a host SDK dependency. */
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };

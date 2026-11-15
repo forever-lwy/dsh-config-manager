@@ -1,5 +1,8 @@
 # AGENTS.md
 
+> forever-lwy fork：遵循 `/home/lwy/dsh-work/AGENTS.md` 的 master 源码 → v* 标签 → Actions 构建 release 分支流程。上游 npm 发布工作流只在上游仓库执行。
+> 包名为 `@forever-lwy/dsh-config-manager`；宿主行 id、设置命名空间与存储键沿用。构建依赖对齐当前 DSH，peer 只设开放下限，`engines.dsh` 固定 `*`。
+
 > 只放硬判据：证据与实测 → `docs/evidence/<域>.md`；机制细则 → `DEVELOPERS.md`；UI → `DESIGN.md`；对外契约 → `docs/contracts/`。
 > 加规则：先在 `docs/evidence/<域>.md` 写透证据，再回下面对应域补一行判据 + 指针，不另起小节。与代码冲突以代码为准，并当轮修本文件。
 > 预算：≤28 KiB、单行 ≤400 B —— `node scripts/check-agents-budget.mjs`。
@@ -84,7 +87,7 @@
 - **索引条件写**：远端改过即中止、绝不覆盖别人；gist 例外 = 不做条件头（PATCH 回 400），改写后复核、冲突报 `index-conflict`。
 - **快照不进机器专属路径**（导出剥 store/cache、写回保留本机）；S3 授权头逐字序列化；祖先副本只落密文。
 - **「本地有改动」与导出载荷必须同一份字节**：`hasLocalChanges` 比 `hashSection(export())` ⇒ 比对里剔掉的易变字段必须同时从载荷剔除，否则每轮轮询都真推一次；身份字节只有 `src/adapters/file-collection.ts` 的 `comparableContent()` 一处。
-- **脱敏剥空的叶子不覆盖本机明文**：patch 行带 `redactedPaths`（缺省=未知→保守）；导入为空且本机非空、又未逐行确认时保留本机并告警（给行 id 与路径、不含值）；合并不得用全局 `replace` 兜底未裁决叶级 Conflict，留下的进 `review`，终态不得「成功且零告警」（判据 → `docs/evidence/sync-channel.md`）。
+- **脱敏空值不覆盖本机密钥**：patch 行标注 `redactedPaths`，缺省未知；声明脱敏或密钥字段始终保留本机非空值并告警。全局 replace 不得兜底未裁决叶级冲突，剩余进 review（→ `docs/evidence/sync-channel.md`）。
 - **会话管理五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；墓碑不删本机数据。
 - **git 通道只碰同步内容**：clone 走 partial+sparse（sparse 面 = `SYNC_ROOT_DIRS`，与 `ADOPT_ROOT_ALLOW` 同源），老 git 回落全量；`--filter` 只给 promisor 副本。
 - **git 通道 `latest/` 是派生视图**：与快照同一次 commit、只写不读（`list`/`download`/合并/保留/冲突都不认）、按 `createdAt` 不回退、删快照时同提交移除、加密不写且告警；必须同进 `ADOPT_ROOT_ALLOW` 与 `syncDirs()`，存量 cone 由 `ensureSparseConeCoversLatest` 补齐（→ `docs/contracts/sync-channel-v1.md` §1.1）。

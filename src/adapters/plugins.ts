@@ -27,6 +27,7 @@ import { patchKeyHazardMessage } from './patch-key-guard.ts';
 import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
 import { applyPatchSecretGuard } from '../core/patch-secret-guard.ts';
+import { PatchStartupInvalidError } from '../core/patch-document.ts';
 import { stripMcpEntries } from './mcp.ts';
 import {
   parsePnpmPatchedDependencies, restorePnpmMachinePaths, sanitizePnpmWorkspacePatches, stripPnpmMachinePaths,
@@ -508,7 +509,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       // 判定与 mcp 适配器同口径（stripMcpEntries）；勾了 mcp 时这些行仍由 mcp 分区带走。
       const raw = stripMcpEntries(l.raw);
       if (raw === undefined) continue;
-      patch.push({ file: l.file, lineId: l.lineId, raw });
+      patch.push({ file: l.file, lineId: l.lineId, raw, ...(l.operation !== undefined ? { operation: l.operation } : {}) });
     }
     for (const f of patchRead.failures) {
       warnings.push(msgOf(ctx)('adapter.patchReadFailed', { reason: `${f.file}: ${f.reason}` }));
@@ -946,7 +947,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       const tl = targetLines.find((l) => l.lineId === pl.lineId);
       // 层身份随计划项走：applyItem 按 pl.file 写回，导入前快照按 target.file 记原行，
       // 两者必须是同一层，否则回滚会把另一层改坏（issue #71）。
-      const layer = resolveWriteLayer(pl.file, ctx.target.profile);
+      const layer = tl?.file ?? resolveWriteLayer(pl.file, ctx.target.profile);
       // 与目标一致 ⇒ 一个字节都不会写，键名风险不归我们管（见下方守卫）；先判 Skip 以免误报。
       if (tl && isDeepStrictEqual(tl.raw, pl.raw)) {
         items.push({ id, kind: 'Skip', adapter: 'plugins', description: msg('adapter.patchLineSame', { lineId: pl.lineId }), severity: 'info' });
@@ -1162,6 +1163,15 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     const data = ctx.sections.get('plugins') as PluginsSection | undefined;
     const pl = data?.patch.find((p) => p.lineId === ref);
     if (!pl) return { ok: false, message: msg('adapter.patchMissing', { ref }) };
+    // Installation warnings do not authorize activation of a package that is still missing.
+    const moduleName = pl.raw !== null && typeof pl.raw === 'object'
+      ? (pl.raw as Record<string, unknown>)['name'] : undefined;
+    if (typeof moduleName === 'string' && data?.plugins.some((p) => p.name === moduleName && !isBundlesOnlyEntry(p))) {
+      const installed = await ctx.target.plugins.listInstalled();
+      if (!installed.some((p) => p.name === moduleName && p.version !== '')) {
+        return { ok: false, warning: true, message: msg('adapter.patchPluginUnavailable', { ref, name: moduleName }) };
+      }
+    }
     // issue #136 A：写回层守卫 —— 「被脱敏剥空」的叶子不得覆盖本机非空明文。
     //
     // 为什么在写回层做（而不是只靠导出侧标注）：协同场景里对方的载荷来自更早版本、第三方工具或
@@ -1170,9 +1180,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     // 守卫只在 Update/Conflict 上生效；Create 没有本机行可保（新行原样写入）。
     // 本机现值读不出来 → 无法证明这次写入不会覆盖明文，这一行**拒绝写**。
     // 非致命（warning）：一行读不出来不该拖垮其余分区，也不该把整笔导入回滚。
-    const localRead = item.kind === 'Create'
-      ? ({ ok: true as const, raw: undefined })
-      : await readLocalPatchRaw(ctx, ref);
+    const localRead = await readLocalPatchRaw(ctx, ref);
     if (!localRead.ok) {
       return {
         ok: false,
@@ -1193,13 +1201,21 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     });
     // 层身份按**语义**映射到目标机：来源是别的 profile 层时不能照抄名字（目标机未必有那个
     // profile，宿主门面会拒绝），一律落到目标机当前 profile 层（与计划项 target.file 同口径）。
-    await ctx.target.patchFile.applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [
-      { lineId: ref, raw: guard.raw, action: item.kind === 'Create' ? 'insert' : 'update' },
-    ]);
+    const raw = guard.raw as Record<string, unknown> | null;
+    // Older snapshots lost source syntax. A nameless row can only be an override.
+    const operation = pl.operation ?? (raw === null || typeof raw !== 'object' || typeof raw['name'] !== 'string' ? 'update' : 'insert');
+    try {
+      await ctx.target.patchFile.applyPatchChanges(item.target?.file ?? resolveWriteLayer(pl.file, ctx.target.profile), [
+        { lineId: ref, raw: guard.raw, action: item.kind === 'Create' ? operation : 'update' },
+      ]);
+    } catch (err) {
+      if (err instanceof PatchStartupInvalidError) return { ok: false, warning: true, message: err.message };
+      throw err;
+    }
     if (guard.kept.length > 0) {
       // 告警只报行 id 与字段路径，绝不带值（值本身就是密钥）
       // 报告面用**计划项 id**（`patch:<lineId>`）而不是裸 lineId：报告与计划项要能逐条对上
-      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchSecretsKept', { ref: item.id, paths: guard.kept.join(', ') }) };
+      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchRedactedSecretsKept', { ref: item.id, paths: guard.kept.join(', ') }) };
     }
     if (guard.cleared.length > 0) {
       return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchSecretsCleared', { ref: item.id, paths: guard.cleared.join(', ') }) };
@@ -1240,6 +1256,10 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
           if (pl === null || typeof pl !== 'object') {
             issues.push({ path: `patch[${i}]`, message: msg('adapter.validate.recordObject', { subject: 'patch line' }), severity: 'error' });
             continue;
+          }
+          const operation = (pl as { operation?: unknown }).operation;
+          if (operation !== undefined && operation !== 'insert' && operation !== 'update') {
+            issues.push({ path: `patch[${i}].operation`, message: msg('adapter.validate.string', { subject: 'patch[].operation (insert/update)' }), severity: 'error' });
           }
           // issue #136 C：脱敏归属路径（可选；存在时必须是字符串数组、元素非空，写回守卫按它精确比对）。
           // **空数组合法**：语义就是「本行没有剥空位置」，守卫按缺省（保守分支）处理。

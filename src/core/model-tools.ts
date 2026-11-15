@@ -34,7 +34,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { randomBytes } from 'node:crypto'
 import { join, resolve } from 'node:path'
 
-import type { JsonValue } from '@deepseek-ai/dsh-tools'
+import type { JsonValue } from '../utils/json.ts'
 import { Exporter } from './exporter.ts'
 import { listSnapshots, planRestore, restore as executeRestore } from './restore.ts'
 import { probeRestoreResume, runRestoreWithResume } from './restore-resume.ts'

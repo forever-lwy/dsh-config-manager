@@ -397,7 +397,7 @@ export interface SessionMoveResult {
 export interface PatchChange { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove'; }
 
 export interface PatchFileFacade {
-  readPatchLines(file: string): Promise<{ lineId: string; raw: unknown }[]>;
+  readPatchLines(file: string): Promise<{ lineId: string; raw: unknown; operation?: 'insert' | 'update' }[]>;
   applyPatchChanges(file: string, changes: PatchChange[]): Promise<void>;
 }
 

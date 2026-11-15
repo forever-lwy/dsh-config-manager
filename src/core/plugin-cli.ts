@@ -26,6 +26,7 @@ import { atomicWriteFileSync } from '../utils/atomic-write.ts'
 import { removeTreeSync } from '../utils/remove-tree.ts'
 import { isDesktopProfile, resolveDesktopCarrier } from '../utils/desktop-carrier.ts'
 import { isRescueActiveSync } from './boot-rescue.ts'
+import { pluginProxyEnv } from '../utils/plugin-proxy.ts'
 import type { PluginInfo } from './types.ts'
 
 /* ------------------------------------------------------------ profile 文件 */
@@ -498,12 +499,13 @@ const winCmdShim = process.platform === 'win32'
  * 静默交互提示；macOS GUI 启动不继承 shell PATH，补上常见 bin 目录（dshmarket #32）。
  */
 function spawnEnv(): NodeJS.ProcessEnv {
-  if (process.platform === 'win32') return { ...process.env, CI: 'true' }
+  const env = pluginProxyEnv()
+  if (process.platform === 'win32') return { ...env, CI: 'true' }
   const parts = (process.env.PATH ?? '').split(':').filter((part) => part !== '')
   for (const bin of ['/opt/homebrew/bin', '/usr/local/bin', `${process.env.HOME ?? ''}/.local/bin`]) {
     if (bin !== '' && !parts.includes(bin)) parts.push(bin)
   }
-  return { ...process.env, CI: 'true', PATH: parts.join(':') }
+  return { ...env, CI: 'true', PATH: parts.join(':') }
 }
 
 /** 一次 CLI 调用的启动描述（env 只在需要覆写子进程环境时出现）。 */

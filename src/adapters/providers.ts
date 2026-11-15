@@ -42,6 +42,37 @@ function stripEntry(entry: ProviderExportEntry): Record<string, unknown> {
   return out;
 }
 
+/** Preserve a working local binding only when the same provider has no usable imported key. */
+async function providerValue(entry: ProviderExportEntry, current: unknown, ctx: ImportContext): Promise<{ value: Record<string, unknown>; kept: string[] }> {
+  const value = structuredClone(entry.raw ?? stripEntry(entry));
+  const kept: string[] = [];
+  const record = (v: unknown): Record<string, unknown> | undefined =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
+  const preserve = async (incoming: Record<string, unknown>, local: Record<string, unknown> | undefined): Promise<void> => {
+    if (local === undefined) return;
+    const endpoint = (v: unknown): unknown => typeof v === 'string' ? v.replace(/\/+$/, '') : v;
+    if (endpoint(incoming['baseURL']) !== endpoint(local['baseURL'])) return;
+    const oldRef = local['apiKeyEnv'];
+    const newRef = incoming['apiKeyEnv'];
+    if (typeof oldRef !== 'string' || oldRef === '' || typeof newRef !== 'string' || oldRef === newRef) return;
+    if (ctx.decryptedCredentials?.has(newRef) || ctx.secretInputs[newRef]) return;
+    if (newRef !== '' && (await ctx.target.credentials.describe(newRef)).configured) return;
+    if (!(await ctx.target.credentials.describe(oldRef)).configured) return;
+    incoming['apiKeyEnv'] = oldRef;
+    kept.push(oldRef);
+  };
+  const local = record(current);
+  const routes = record(value['providers']);
+  if (routes !== undefined) {
+    const localRoutes = record(local?.['providers']);
+    for (const [route, v] of Object.entries(routes)) {
+      const incoming = record(v);
+      if (incoming !== undefined) await preserve(incoming, record(localRoutes?.[route]));
+    }
+  } else await preserve(value, local);
+  return { value, kept };
+}
+
 export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
   readonly id = 'providers' as const;
   // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
@@ -168,7 +199,7 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
           description: msg('adapter.providerUnregistered', { route, ns: entry.namespace }),
           severity: 'warning', target: { adapter: 'providers', ref: entry.namespace },
         });
-      } else if (current !== null && isDeepStrictEqual(current.value, entry.raw ?? stripEntry(entry))) {
+      } else if (current !== null && isDeepStrictEqual(current.value, (await providerValue(entry, current.value, ctx)).value)) {
         // 值相等优先于「目标为空」——与 settings.planNamespaceItems 同一口径与顺序（issue #73）
         items.push({ id, kind: 'Skip', adapter: 'providers', description: msg('adapter.providerSame', { route }), severity: 'info' });
       } else if (current === null || isEmptyValue(current.value)) {
@@ -195,15 +226,17 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
     const data = ctx.sections.get('providers') as ProviderExportSection | undefined;
     const entry = data?.providers[route];
     if (!entry) return { ok: false, message: ctx.msg('adapter.providerMissing', { route }) };
-    const value = entry.raw ?? stripEntry(entry);
+    let current: NamespaceInfo | undefined;
     let expected: number | undefined;
     try {
-      expected = (await ctx.target.settings.describe(entry.namespace, { redactSecrets: true })).revision;
+      current = await ctx.target.settings.describe(entry.namespace, { redactSecrets: true });
+      expected = current.revision;
     } catch {
       expected = undefined; // 目标 namespace 不存在（Create）
     }
+    const { value, kept } = await providerValue(entry, current?.value, ctx);
     await ctx.target.settings.replace(entry.namespace, value, expected);
-    return { ok: true };
+    return { ok: true, ...(kept.length > 0 ? { warning: true, message: ctx.msg('adapter.providerSecretRefKept', { refs: kept.join(', ') }) } : {}) };
   }
 
   async validate(data: ProviderExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {

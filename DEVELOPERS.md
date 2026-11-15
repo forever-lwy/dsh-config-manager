@@ -1,3 +1,5 @@
+> **Fork workflow**: follow the parent deployment AGENTS.md. Develop and verify on `master`, commit a patch version, then publish only when authorized via `v<version>`; `.github/workflows/release.yml` and `scripts/release.mjs` match the other forever-lwy plugins. Push master separately before the first tag. Only CI writes `release`; select it as the default branch in GitHub before GUI installation. The npm workflow below is upstream-only.
+
 # 🛠️ DSH Config Manager — 开发者 / 维护者文档
 
 > 面向开发者与维护者。**用户请直接看 [README.md](README.md)（英文）或 [README.zh-CN.md](README.zh-CN.md)。**

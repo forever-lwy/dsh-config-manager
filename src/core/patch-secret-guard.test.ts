@@ -37,16 +37,16 @@ test('#136 守卫：声明路径 + 导入真实非空新值 → 照常写入（�
   assert.deepEqual(r.cleared, []);
 });
 
-test('#136 守卫：逐行显式确认（confirmed）→ 允许清空，并把「已清空」写进结果', () => {
+test('accepting a row keeps a declared redacted secret and reports the preserved path', () => {
   const r = applyPatchSecretGuard({
     importedRaw: { id: 'gate', config: { apiKey: '' } },
     localRaw: { id: 'gate', config: { apiKey: 'sk-local-plain' } },
     redactedPaths: ['raw.config.apiKey'],
     confirmed: true,
   });
-  assert.deepEqual(r.raw, { id: 'gate', config: { apiKey: '' } }, '确认后按导入值写空');
-  assert.deepEqual(r.cleared, ['raw.config.apiKey']);
-  assert.deepEqual(r.kept, []);
+  assert.deepEqual(r.raw, { id: 'gate', config: { apiKey: 'sk-local-plain' } });
+  assert.deepEqual(r.cleared, []);
+  assert.deepEqual(r.kept, ['raw.config.apiKey']);
 });
 
 test('#136 守卫：旧载荷（无 redactedPaths）→ 保守分支：空串 + 本机非空即保留 + warning 路径', () => {
@@ -60,15 +60,26 @@ test('#136 守卫：旧载荷（无 redactedPaths）→ 保守分支：空串 + 
   assert.deepEqual(r.kept, ['raw.nested.token']);
 });
 
-test('#136 守卫：旧载荷保守分支也允许在显式确认后清空（不把「用户主动清空」永久锁死）', () => {
+test('legacy snapshots also keep secret fields when a row is accepted', () => {
   const r = applyPatchSecretGuard({
     importedRaw: { id: 'gate', token: '' },
     localRaw: { id: 'gate', token: 'plain-token' },
     confirmed: true,
   });
   assert.equal(r.conservative, true);
-  assert.deepEqual(r.raw, { id: 'gate', token: '' });
-  assert.deepEqual(r.cleared, ['raw.token']);
+  assert.deepEqual(r.raw, { id: 'gate', token: 'plain-token' });
+  assert.deepEqual(r.cleared, []);
+  assert.deepEqual(r.kept, ['raw.token']);
+});
+
+test('an incomplete redaction list still protects empty secret fields', () => {
+  const r = applyPatchSecretGuard({
+    importedRaw: { config: { apiKey: '', label: '' } },
+    localRaw: { config: { apiKey: 'local-test-key', label: 'local-label' } },
+    redactedPaths: ['raw.config.label'], confirmed: true,
+  });
+  assert.deepEqual(r.raw, { config: { apiKey: 'local-test-key', label: 'local-label' } });
+  assert.deepEqual(r.cleared, []);
 });
 
 test('#136 守卫：本机没有这一行（Create）→ 原样返回，不凭空造保护', () => {

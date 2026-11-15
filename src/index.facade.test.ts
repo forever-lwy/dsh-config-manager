@@ -1062,7 +1062,7 @@ test('#133 applyPatchChanges：新 id 走 insert 动作时落进 insert 块（�
   }
 })
 
-test('#133 跨层提升：把另一层的 insert 成员写成顶层行必须拒写（文件不动）', async () => {
+test('home override of a profile insert keeps its original declaration', async () => {
   const { home, cleanup } = patchHome()
   try {
     mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
@@ -1075,9 +1075,8 @@ test('#133 跨层提升：把另一层的 insert 成员写成顶层行必须拒�
     const err = await facade
       .applyPatchChanges(USER_PATCH_FILE, [{ lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client' }, action: 'update' }])
       .then(() => null, (e: unknown) => e as Error)
-    assert.ok(err !== null, '跨层提升必须拒写')
-    assert.match(String(err.message), /mcp-a/)
-    assert.equal(existsSync(join(home, USER_PATCH_FILE)), false, '拒写 = 用户层文件一个字节都没写')
+    assert.equal(err, null, 'home 层覆盖 profile 层的条目是合法的宿主语义')
+    assert.equal(existsSync(join(home, USER_PATCH_FILE)), true)
     assert.equal(readFileSync(profileLayer, 'utf8'), before, '另一层当然也不许动')
   } finally {
     cleanup()

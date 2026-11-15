@@ -225,10 +225,11 @@ test('#135 已知缺口：键名不受 forceQuotes 保护（数值样式键名�
 test('接线守卫：patch 门面与 boot-safety 的 YAML 解析都必须走本方言', () => {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const index = fs.readFileSync(root + 'src/index.ts', 'utf8');
+  const facade = fs.readFileSync(root + 'src/utils/dsh-patch-file.ts', 'utf8');
 
-  assert.ok(index.includes('doc = loadPatchDocument(text)'), 'readPatchLines 必须用方言载入');
-  assert.ok(index.includes('doc = loadPatchDocument(existing)'), 'applyPatchChanges 必须用方言载入既有文件');
-  assert.match(index, /\+ dumpPatchDocument\((out|plan\.items)\)/, '写回 patch 文件必须用方言（yaml.dump 会把 {__jsExpr} 写成普通 map）');
+  assert.ok(facade.includes('doc = loadPatchDocument(text)'), 'readPatchLines 必须用方言载入');
+  assert.ok(facade.includes('doc = loadPatchDocument(existing)'), 'applyPatchChanges 必须用方言载入既有文件');
+  assert.match(facade, /\+ dumpPatchDocument\((out|plan\.items)\)/, '写回 patch 文件必须用方言（yaml.dump 会把 {__jsExpr} 写成普通 map）');
   assert.match(
     index,
     /parseYaml:\s*\(text\)\s*=>\s*loadPatchDocument\(text\)/,

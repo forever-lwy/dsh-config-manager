@@ -42,4 +42,4 @@
 #   llm-pi-ai    (settings.yaml section) -> @deepseek-ai/dsh-llm-pi-ai
 - insert:
     - id: config-manager
-      name: 'dsh-config-manager'
+      name: '@forever-lwy/dsh-config-manager'

@@ -20,6 +20,11 @@ import { interpolate, registerBaseMessageCatalog, registeredMessage } from './en
 export type { MsgFunc, MsgParams } from './msg-types.ts';
 
 export const zh = {
+  'adapter.patchRedactedSecretsKept': '{ref} 已写入，保留本机密钥字段：{paths}（备份中没有提供这些值；需要清空时请在对应插件设置中操作）',
+  'host.patchStartupInvalid': 'patch 层 {file} 的启动配置检查未通过：{ids} 存在重复、缺少模块或模块尚不可用；已拒绝写入，原文件保留',
+  'host.patchStartupUnavailable': '无法定位当前 DSH 安装，启动配置无法检查；已拒绝写入',
+  'adapter.patchPluginUnavailable': '暂缓写入 {ref}：插件 {name} 尚未安装成功，请安装后重新同步',
+  'adapter.providerSecretRefKept': '已导入配置并保留本机可用的密钥引用：{refs}（备份未提供对应密钥）',
   // ---------- 导出 ----------
   'export.encryptionRequired': '导出包含秘密需要注入 EncryptionProvider（m4 实现），拒绝明文导出秘密',
   'export.sectionFailed': '分区 {adapter} 导出失败: {reason}',
@@ -555,6 +560,11 @@ export const zh = {
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
+  'adapter.patchRedactedSecretsKept': '{ref} written; kept local secret fields: {paths} (the backup did not supply these values; clear them in the corresponding plugin settings if needed)',
+  'host.patchStartupInvalid': 'Startup configuration validation failed for {file}: duplicate, nameless or unavailable entries: {ids}; the original file was kept',
+  'host.patchStartupUnavailable': 'Cannot locate the running DSH installation to validate startup configuration; refusing to write',
+  'adapter.patchPluginUnavailable': 'Deferred {ref}: plugin {name} is not installed successfully; install it and sync again',
+  'adapter.providerSecretRefKept': 'Configuration imported; kept working local credential references: {refs} (the backup did not supply the corresponding secrets)',
   // ---------- export ----------
   'export.encryptionRequired': 'Encrypted export requires an EncryptionProvider (m4); refusing to export secrets in plaintext',
   'export.sectionFailed': 'Section {adapter} export failed: {reason}',
