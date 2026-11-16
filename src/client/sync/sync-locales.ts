@@ -241,6 +241,8 @@ export const zh = {
   // 自动同步（方案 A）
   'autosync.title': '自动同步',
   'autosync.description': '开启后，DSH 在后台保持配置一致：本地配置有改动时自动上传，检测到远端有新快照时才自动拉取合并；定时器仅作兜底轮询，无变化不重复动作。仅在无冲突且无需人工干预时才自动写入本地。',
+  // issue #143：同步页原本没有任何指向保留策略的线索 —— 远端快照同样按它裁剪。
+  'autosync.retentionNotice': '远端快照与定时备份共用同一份保留策略（会裁剪旧快照），在首页「定时备份」里设置。',
   'autosync.enable': '启用',
   'autosync.interval': '兜底轮询间隔',
   'autosync.intervalHint': '兜底检查节奏：间隔到点 / DSH 启动时检查远端是否有新快照，有才拉取合并。启用「本地改动即时同步」后，保存配置会立刻触发一轮，不必等这里。',
@@ -305,6 +307,7 @@ export const zh = {
   'history.autosyncReasonUpToDate': '无变化（本地与远端一致）',
   'history.autosyncReasonWarning': '部分内容未落地（详情见本轮告警）',
   'history.autosyncReasonUnchanged': '远端无新快照，无需合并',
+  'history.autosyncReasonAllConflicted': '有分区仍在等冲突裁决，本轮未上传（裁决后会照常推送）',
   'history.autosyncConflicted': '跳过冲突分区：{sections}',
   'history.autosyncApplied': '应用分区：{sections}',
   'history.autosyncError': '错误：{error}',
@@ -334,6 +337,8 @@ export const zh = {
   'toast.pushDone': '推送完成',
   // issue #140：内容与远端最新快照一致 ⇒ 什么都没上传
   'toast.pushSkipped': '内容未变化，已跳过',
+  // issue 146：目标分区全被未裁决冲突扣下 ⇒ 一个分区都没推
+  'toast.pushAllConflicted': '未推送任何分区：还有分区待冲突裁决',
   'toast.syncStartFailed': '从远端合并失败',
   'toast.autosyncUpdateFailed': '自动同步设置更新失败',
   'toast.autosyncUpdated': '自动同步设置已更新',
@@ -717,6 +722,7 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.clearSavedPassword': 'Delete saved password',
   'autosync.title': 'Auto Sync',
   'autosync.description': 'When enabled, DSH keeps config in sync in the background: uploads locally-changed config automatically, pulls and merges only when it detects a new remote snapshot; the timer is just a fallback poll and no-ops when nothing changed. Local writes happen only when there are no conflicts or manual-decision items.',
+  'autosync.retentionNotice': 'Remote snapshots share one retention policy with scheduled backups (older snapshots get pruned); set it on the Home card "Auto backup".',
   'autosync.enable': 'Enabled',
   'autosync.interval': 'Fallback poll interval',
   'autosync.intervalHint': 'Fallback cadence: on interval / DSH startup it checks whether the remote has a newer snapshot and only then pulls and merges (no upload). With "Sync local changes immediately" on, saving a config triggers a run right away.',
@@ -778,6 +784,7 @@ export const en: Record<keyof typeof zh, string> = {
   'history.autosyncReasonUpToDate': 'No changes (local and remote match)',
   'history.autosyncReasonWarning': 'Some content did not land (see this run’s warnings)',
   'history.autosyncReasonUnchanged': 'No new remote snapshot to merge',
+  'history.autosyncReasonAllConflicted': 'Sections are still waiting for conflict resolution, so nothing was uploaded this run',
   'history.autosyncConflicted': 'Skipped conflict sections: {sections}',
   'history.autosyncApplied': 'Applied sections: {sections}',
   'history.autosyncError': 'Error: {error}',
@@ -804,6 +811,7 @@ export const en: Record<keyof typeof zh, string> = {
   'toast.pushFailed': 'Push failed',
   'toast.pushDone': 'Push completed',
   'toast.pushSkipped': 'No content changes — skipped',
+  'toast.pushAllConflicted': 'Nothing pushed: sections still await conflict resolution',
   'toast.syncStartFailed': 'Merge from remote failed',
   'toast.autosyncUpdateFailed': 'Failed to update auto-sync settings',
   'toast.autosyncUpdated': 'Auto-sync settings updated',

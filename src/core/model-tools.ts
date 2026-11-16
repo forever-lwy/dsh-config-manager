@@ -579,6 +579,9 @@ export function createModelTools(deps: ModelToolsDeps) {
         ...(sections === undefined ? {} : { sections }),
         ...(encrypt ? { encrypt: true, includeSecrets: false, password: password ?? '' } : {}),
         ...(input.force === true ? { force: true } : {}),
+        // 空数组 = 连磁盘待裁决一起扣（issue #146）：agent 的手动推送与 GUI 同口径，
+        // 否则「跑一次 push 工具」就能把用户挂着未裁决的分区整块覆盖掉。
+        skipSections: [],
       })
       const report = await runWithMutationLock(deps.host.mutationLock, { op: 'model-sync-push', isBlocked: () => deps.host.safeModeIsBlocked?.() ?? false }, async (lockCtx) => {
         if (deps.host.phase3Recovery !== undefined && lockCtx !== null) {
@@ -605,7 +608,10 @@ export function createModelTools(deps: ModelToolsDeps) {
         // 不透传的话模型会把「ok:true + snapshotId」读成「又推了一份新快照」。
         ...(report.skipped === 'unchanged'
           ? { skipped: 'unchanged' as const, adoptedSnapshotId: report.adoptedSnapshotId ?? report.snapshotId }
-          : {}),
+          // issue #146：目标分区全被未裁决冲突扣下 ⇒ 一个分区都没推，绝不读成「推成功」
+          : report.skipped === 'all-conflicted'
+            ? { skipped: 'all-conflicted' as const }
+            : {}),
         ...(report.message === undefined ? {} : { message: report.message }),
         ...(encrypt ? { passwordSource: stored === undefined ? 'argument' : 'stored' } : {}),
       }

@@ -51,6 +51,19 @@ test('Web legacy snapshot overrides desktop bundle entries without duplicate ins
   assert.ok((await adapter.analyzeImport(section, ctx)).every((item) => item.kind === 'Skip'))
 })
 
+test('chain downgrades align imported names to the installed host before startup validation', async (t) => {
+  const { patch, path } = await fixture(t)
+  const outcome = await patch.applyPatchChanges('profiles/desktop/cordis.patch.yml', [
+    { lineId: 'connection', raw: { id: 'connection', name: 'old-web-only-module', config: { cookieMaxAgeDays: 365 } }, action: 'insert' },
+  ])
+  assert.deepEqual(outcome.downgraded, ['connection'])
+  const doc = loadPatchDocument(await readFile(path, 'utf8')) as Parameters<typeof composeEntries>[0][number]
+  const actual = composeEntries([[{ insert: base }], doc])
+  assert.equal(actual.filter((entry) => entry.id === 'connection').length, 1)
+  assert.equal(actual.find((entry) => entry.id === 'connection')?.name, base[1]!.name)
+  assert.equal((await patch.readPatchLines('profiles/desktop/cordis.patch.yml'))[0]?.operation, 'update')
+})
+
 test('invalid startup candidate leaves original file byte-for-byte intact', async (t) => {
   const { patch, path } = await fixture(t)
   const original = '# original comment\n- id: connection\n  config: { cookieMaxAgeDays: 365 }\n'

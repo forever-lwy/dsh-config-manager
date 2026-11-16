@@ -66,7 +66,7 @@ import { formPatchFromStatus, markDirty, resetDirty } from './config-dirty.ts'
 import { clearedChannelFormFields, prepareClear, shouldDiscardSaveResult } from './config-clear-guard.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
-  githubPollMessage, isClientChannel, pushReportView, readStoredChannel, sectionCountsOf,
+  githubPollMessage, isClientChannel, pushPreviewBlocked, pushReportView, readStoredChannel, sectionCountsOf,
   gistSessionsRiskKey,
   initialSyncSections, normalizeSessionsLimit, syncSectionOptions, writeStoredChannel, SYNC_CHANNEL_ORDER,
 } from './sync-view.ts'
@@ -103,7 +103,6 @@ import { SyncActivityBar } from './SyncActivityBar.tsx'
 import { deviceLabel } from './remote-device-view.ts'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
-
 export interface SyncPanelProps {
   api: SyncApi
   t: TranslateNS<'config-manager-sync'>
@@ -539,14 +538,15 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const loadAutosync = async (): Promise<void> => {
     try {
       const all = await api.autosyncStatusAll()
-      patchChannelState('git', {
-        autosync: all.git, autosyncEnabled: all.git.enabled, autosyncInterval: all.git.interval,
-        autosyncRealtime: all.git.realtime ?? true,
-      })
-      patchChannelState('webdav', {
-        autosync: all.webdav, autosyncEnabled: all.webdav.enabled, autosyncInterval: all.webdav.interval,
-        autosyncRealtime: all.webdav.realtime ?? true,
-      })
+      for (const ch of SYNC_CHANNEL_ORDER) {
+        const st = all[ch]
+        if (st !== undefined) {
+          patchChannelState(ch, {
+            autosync: st, autosyncEnabled: st.enabled, autosyncInterval: st.interval,
+            autosyncRealtime: st.realtime ?? true,
+          })
+        }
+      }
     } catch (err) {
       // R-20：读取自动同步状态失败（此前写入页面最底部的共享 error Banner，常滚出视野）
       toast.error(t('toast.autosyncLoadFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
@@ -913,7 +913,14 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         patchChannel({ encryptPassword: '', encryptPasswordConfirm: '' })
         // M-19：推送终局回执（结果弹窗关闭后不再有任何痕迹）。
         // issue 140：没新建快照时必须说「已跳过」，不能报「已推送」。
-        toast.ok(report.skipped === 'unchanged' ? t('toast.pushSkipped') : t('toast.pushDone'))
+        // issue 146：全被冲突扣下同样不是「推送完成」，必须换文案（否则用户以为远端已更新）
+        toast.ok(
+          report.skipped === 'unchanged'
+            ? t('toast.pushSkipped')
+            : report.skipped === 'all-conflicted'
+              ? t('toast.pushAllConflicted')
+              : t('toast.pushDone'),
+        )
         void loadSnapshots()
       } else {
         // 失败保留结果弹窗（K-15，含告警明细）；同时给出不依赖弹窗的回执
@@ -1447,7 +1454,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
           {/* v3：页面级的加密/解密/快照列表卡已移入各自的通道卡（见 renderChannelCard）。 */}
           {/* 同步记录（只留操作日志）。2026-11-14 用户要求删掉原先那条「在产物库查看远端快照」
               指路按钮：远端快照本来就在产物库的来源页签里，页面不必另递一只手指过去。 */}
-          <SyncLogList api={api} t={t} />
+          <SyncLogList api={api} t={t} sectionName={(id) => sectionName(id as SectionId)} />
 
           {/* P0-②：push 前只读预览确认弹窗（「将推送什么」→ 确认后才真正上传；Radix Modal） */}
           <Modal
@@ -1485,6 +1492,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               <Button
                 variant="primary"
                 loading={state.busy === 'push'}
+                disabled={state.busy === 'push' || pushPreviewBlocked(state.pushPreview.preview, forcePush)}
                 onClick={() => { void runPush() }}
               >
                 {t('syncflow.pushConfirm')}
@@ -1556,23 +1564,23 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               onClose={cancelConfirm}
               closeDisabled={state.busy === 'sync'}
             />
-            <Modal.Body scroll style={{ maxHeight: '72vh' }}>
-              {state.confirmSession !== null && (
-                <SyncConfirmView
-                  api={api}
-                  syncSessionId={state.confirmSession.syncSessionId}
-                  snapshotId={state.confirmSession.snapshotId}
-                  items={state.confirmSession.items}
-                  needsReview={state.confirmSession.needsReview}
-                  compatibility={state.confirmSession.compatibility}
-                  t={t}
-                  decisions={state.confirmDecisions}
-                  onDecisionsChange={(d) => { patch({ confirmDecisions: d }) }}
-                  onCancel={cancelConfirm}
-                  onRollbackDone={onRollbackApplied}
-                />
-              )}
-            </Modal.Body>
+            {state.confirmSession !== null && (
+              <SyncConfirmView
+                api={api}
+                syncSessionId={state.confirmSession.syncSessionId}
+                snapshotId={state.confirmSession.snapshotId}
+                items={state.confirmSession.items}
+                needsReview={state.confirmSession.needsReview}
+                compatibility={state.confirmSession.compatibility}
+                t={t}
+                decisions={state.confirmDecisions}
+                onDecisionsChange={(d) => { patch({ confirmDecisions: d }) }}
+                onCancel={cancelConfirm}
+                onRollbackDone={onRollbackApplied}
+                remoteChannelBody={buildSyncChannelBody(formOf(state))}
+                sectionName={(id) => sectionName(id as SectionId)}
+              />
+            )}
           </Modal>
     </div>
   )

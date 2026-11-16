@@ -3,7 +3,9 @@ import fs from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { PatchFileFacade } from '../core/types.ts'
 import { zhMsg, type MsgFunc } from '../core/messages.ts'
-import { describePatchDocument, describePatchLayoutDrift, planPatchDocument, PatchStartupInvalidError } from '../core/patch-document.ts'
+import { describePatchDocument, describePatchLayoutDrift, planPatchDocument, PatchStartupInvalidError, unprovidedTopLevelIds } from '../core/patch-document.ts'
+import { alignOverrideNames, patchChainIndex, type PatchChainRead, type PatchWriteOutcome } from '../core/patch-chain.ts'
+import { PatchChainCache, downgradeProvidedInserts, readPatchChainFromProfile } from './patch-chain-read.ts'
 import { isPatchLayerRel, profilePatchRel, USER_PATCH_FILE } from '../core/patch-layers.ts'
 import { describePatchYamlError, dumpPatchDocument, loadPatchDocument } from './patch-yaml.ts'
 import { atomicWriteFile } from './atomic-write.ts'
@@ -101,8 +103,17 @@ export class DshPatchFileFacade implements PatchFileFacade {
   async applyPatchChanges(
     file: string,
     changes: { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove' }[],
-  ): Promise<void> {
+  ): Promise<PatchWriteOutcome> {
     const p = this.patchPath(file)
+    const startup = await this.readStartup?.()
+    const readChain = await this.readPatchChainQuietly()
+    // Built-in bundles can live in the host installation rather than the profile.
+    // Keep the installed host's authoritative base in the chain used for writes.
+    const chain = readChain === null || startup === undefined ? readChain : {
+      ...readChain,
+      sources: [{ file: 'bundles:installed-host', doc: [{ insert: startup.entries }] }, ...readChain.sources],
+    }
+    const { effective, downgraded } = downgradeProvidedInserts(chain, file, changes)
 
     // 1. Load the current document (the ordered table itself is built by planPatchDocument).
     //
@@ -134,7 +145,6 @@ export class DshPatchFileFacade implements PatchFileFacade {
     //    `- insert:` block member *adds* entries. Emitting every row top-level therefore
     //    turned one update into "every insert-only entry (MCP servers, most notably) is
     //    gone after restart".
-    const startup = await this.readStartup?.()
     const other = file === USER_PATCH_FILE ? profilePatchRel(this.profile) : USER_PATCH_FILE
     const otherDoc = await this.readPatchDocQuietly(other, startup !== undefined)
     const inheritedIds = new Set(startup?.entries.map((entry) => entry.id) ?? [])
@@ -142,9 +152,10 @@ export class DshPatchFileFacade implements PatchFileFacade {
     if (file === USER_PATCH_FILE) {
       for (const id of describePatchDocument(otherDoc).insertIds) inheritedIds.add(id)
     }
-    const plan = planPatchDocument(doc, changes, inheritedIds)
+    const plan = planPatchDocument(doc, effective, inheritedIds)
+    const items = chain === null ? plan.items : alignOverrideNames(plan.items, patchChainIndex(chain))
     const text = '# rewritten by dsh-config-manager import (original comments not preserved)\n'
-      + dumpPatchDocument(plan.items)
+      + dumpPatchDocument(items)
 
     // 3. Post-write structure self-check, before anything touches the disk: re-parse the
     //    text we just serialized and require both id sets to match the plan item by item.
@@ -155,11 +166,16 @@ export class DshPatchFileFacade implements PatchFileFacade {
       throw new Error(this.msg('host.patchSemanticDrift', { file, detail: drift }))
     }
 
+    if (chain !== null && chain.failures.length === 0) {
+      const orphans = unprovidedTopLevelIds([...chain.sources.map(source => source.doc), doc], plan.topLevelIds)
+      if (orphans.length > 0) throw new PatchStartupInvalidError(this.msg('host.patchRefuseUnknownId', { file, ids: orphans.join(', ') }))
+    }
+
     // Compose the complete startup configuration using the installed host's own merger.
     // Validation runs before atomicWriteFile: a rejected candidate leaves the original intact.
     if (startup !== undefined) {
       const otherItems = Array.isArray(otherDoc) ? otherDoc : []
-      const layers = file === USER_PATCH_FILE ? [otherItems, plan.items] : [plan.items, otherItems]
+      const layers = file === USER_PATCH_FILE ? [otherItems, items] : [items, otherItems]
       const entries = startup.compose([[{ insert: startup.entries }], ...layers], () => {})
       const seen = new Set<string>()
       const invalid: string[] = []
@@ -178,6 +194,18 @@ export class DshPatchFileFacade implements PatchFileFacade {
     }
 
     await atomicWriteFile(p, text)
+    this.chainCache.invalidate()
+    return { downgraded }
+  }
+
+  private readonly chainCache = new PatchChainCache(2000)
+
+  async readPatchChain(): Promise<PatchChainRead> {
+    return this.chainCache.get(() => readPatchChainFromProfile(this.homeDir, this.profile))
+  }
+
+  private async readPatchChainQuietly(): Promise<PatchChainRead | null> {
+    try { return await this.readPatchChain() } catch { return null }
   }
 
   /** Missing sibling layers are empty; a required startup audit refuses unreadable layers. */
