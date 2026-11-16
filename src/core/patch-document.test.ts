@@ -11,7 +11,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  describePatchDocument, describePatchLayoutDrift, PatchPromoteRefusedError, planPatchDocument,
+  describePatchDocument, describePatchLayoutDrift, PatchPromoteRefusedError, patchDocumentEntries,
+  planPatchDocument, unprovidedTopLevelIds,
 } from './patch-document.ts';
 
 const DOC = [
@@ -104,4 +105,49 @@ test('#133 写后自检：布局不一致时给出可读差异（一致返回 nu
   assert.ok(drift !== null);
   assert.match(String(drift), /insert=\[mcp-a, mcp-b\]/);
   assert.match(String(drift), /got insert=\[\]/);
+});
+
+/* ------------------- issue #144：跨层「这个 id 存在吗」的两个判据原语 ------------------- */
+
+test('#144 patchDocumentEntries：读出 name 与形态（insert 成员 / 顶层行），坏条目跳过', () => {
+  assert.deepEqual(patchDocumentEntries([
+    { id: 'top', name: 'pkg-top', disabled: true },
+    { insert: [{ id: 'in-a', name: 'pkg-a', config: { x: 1 } }, { id: 'in-b' }, { name: 'no-id' }] },
+    { id: 42 },
+    null,
+    { insert: 'not-an-array' },
+  ]), [
+    { id: 'top', name: 'pkg-top', inInsert: false },
+    { id: 'in-a', name: 'pkg-a', inInsert: true },
+    { id: 'in-b', inInsert: true },
+  ]);
+});
+
+test('#144 unprovidedTopLevelIds：别的层 insert 过它 = 已提供（覆盖合法），只有整链都没人才拒绝', () => {
+  const bundleLayer = [{ insert: [{ id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh' }] }];
+  // 旧判据（promotedTopLevelIds）在这里反过来拒绝 —— 那正是 #144 里 6 个 id 被误拒的成因
+  assert.deepEqual(unprovidedTopLevelIds([bundleLayer, []], ['remote-ssh']), []);
+  assert.deepEqual(unprovidedTopLevelIds([bundleLayer], ['ghost']), ['ghost'], '整链没人提供 → 宿主 not found 丢弃，必须拒绝');
+  assert.deepEqual(unprovidedTopLevelIds([], ['ghost']), ['ghost'], '读不出来的层由调用方丢弃后同样按「没人提供」处理');
+  assert.deepEqual(unprovidedTopLevelIds([bundleLayer], []), []);
+});
+
+test('#144 forceTopLevel：本层已有 insert 成员时，带标记的 update 必须搬到顶层（否则仍是两条新增）', () => {
+  const plan = planPatchDocument(DOC, [
+    { lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client', config: { transport: 'stdio', command: 'uvx' } }, action: 'update', forceTopLevel: true },
+  ]);
+  assert.deepEqual(plan.topLevelIds, ['top-a', 'mcp-a', 'top-b'], '转换为覆盖行时保留原 insert 块的位置，不再占新增位');
+  assert.deepEqual(plan.insertIds, ['mcp-b'], '另两个成员不动');
+  const block = plan.items.find((item) => Array.isArray((item as Record<string, unknown>)['insert'])) as { insert: { id: string }[] };
+  assert.deepEqual(block.insert.map((e) => e.id), ['mcp-b'], '块里不得再留 mcp-a');
+  const row = plan.items.find((item) => (item as Record<string, unknown>)['id'] === 'mcp-a') as { config: { command: string } };
+  assert.equal(row.config.command, 'uvx', '配置照样写进去');
+});
+
+test('#144 forceTopLevel：原条目不在文档里时也直接落顶层行（幂等重放不产生第二条新增）', () => {
+  const plan = planPatchDocument(DOC, [
+    { lineId: 'ghost', raw: { id: 'ghost', config: { a: 1 } }, action: 'update', forceTopLevel: true },
+  ]);
+  assert.deepEqual(plan.topLevelIds, ['top-a', 'top-b', 'ghost']);
+  assert.deepEqual(plan.insertIds, ['mcp-a', 'mcp-b']);
 });

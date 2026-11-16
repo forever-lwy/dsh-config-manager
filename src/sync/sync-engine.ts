@@ -68,6 +68,9 @@ import {
   writeMergeBaseline as persistMergeBaseline,
 } from './pending-merge.ts';
 import type { PendingMerge, SyncState } from './sync-state.ts';
+import { pendingMergeAfterPush, resolveHeldSections, resolvePushTargets, type PushTargets } from './push-skip.ts';
+import { memoAsync } from '../utils/async-once.ts';
+import { hasLocalSectionChanges } from './local-changes.ts';
 // 写基线（祖先副本 + sync-state）的实现整体下沉，引擎只做环境透传（体量棘轮 + G-44 口径集中）
 import { recordBaseline as recordBaselineAt } from './baseline-record.ts';
 import type { RecordBaselineOptions } from './baseline-record.ts';
@@ -222,6 +225,14 @@ export interface SyncPushOptions {
    * 「最新 N 个里被我勾中的那几个」。宿主侧由 sync-selection.json 的 sessionsInclude 持久化。
    */
   sessions?: { limit?: number; include?: string[] };
+  /**
+   * 本轮**必须扣下**的分区（issue #146）：未裁决冲突的分区绝不上行。语义看「传没传」，不是「空不空」：
+   * - 不传（`undefined`）= 手动推送：只按本参数扣，**不读磁盘**上的历史待裁决；
+   * - 传了（含空数组）= 本参数 ∥ 磁盘 pendingMerge 一起扣（自动同步必须传，否则上一轮留下的待裁决
+   *   会被任何一轮别的分区的改动顺手推上去 —— #146 的复发路径）；
+   * - `force: true` 时整个扣下语义不生效（强推 = 明确要用本机覆盖远端）。实现见 `push-skip.ts`。
+   */
+  skipSections?: SectionId[];
   /** 加密快照：sections 载荷整体加密（AES-256-GCM），manifest.encrypted=true。
    *  开启时必须提供 password（仅本次调用内存使用，绝不落盘/落日志）。 */
   encrypt?: boolean;
@@ -286,8 +297,9 @@ export interface SyncPushReport {
    * 语义：`ok:true` + 本字段 = 「什么都没做，也不算失败」——未 upload、未建目录、未裁剪；
    * 只是把基线指针**收养**到远端最新快照（`adoptedSnapshotId`），让下一轮判定有正确起点。
    * GUI / 报告必须显式区分它（「内容未变化，已跳过」），不能显示成「已推送 xx」。
+   * issue #146：`all-conflicted` = 一个分区都没推（`ok:true` + `snapshotId:''`，远端与基线都没动），不是失败，但绝不能显示成「已推送」。
    */
-  skipped?: 'unchanged';
+  skipped?: 'unchanged' | 'all-conflicted';
   /** issue #140：`skipped='unchanged'` 时被收养的远端快照 id（= 本次报告里的 snapshotId） */
   adoptedSnapshotId?: string;
 }
@@ -332,6 +344,8 @@ export interface SyncPushPreview {
   encrypted: boolean;
   /** 本次推送是否真的会带上凭据载荷（.credentials.yaml 可读且非空；issue #38） */
   credentialsIncluded: boolean;
+  /** issue #146：与 push 同口径的终态（全被冲突扣下 ⇒ 预览也是「什么都没得推」，不是错误） */
+  skipped?: 'all-conflicted';
   message?: string;
 }
 
@@ -627,9 +641,16 @@ export class SyncEngine {
    * 「推上去了、拉下来静默没有」）。
    */
   private pullSectionIds(): Set<SectionId> {
-    const ids = this.portableAdapters().map((a) => a.id);
-    for (const a of this.optInAdapters()) ids.push(a.id);
-    return new Set(ids);
+    return new Set(this.candidateAdapters().map((a) => a.id));
+  }
+
+  /**
+   * 会进载荷的分区 adapter = portable（受注入范围约束）+ 本次放行的可选分区。
+   * 「哪些分区算数」只留这一处：hasLocalChanges / pullSectionIds / pushTargets 三处各写一份候选集合时，
+   * 漏掉一处就出现「推上去了、拉下来静默没有」或「有改动却判成无变化」（#146 的候选面纪律）。
+   */
+  private candidateAdapters(): ConfigAdapter[] {
+    return [...this.portableAdapters(), ...this.optInAdapters()];
   }
 
   /** 本次显式放行的「可选分区」adapter（空集 = 一个都不放行；顺序跟随 adapters） */
@@ -639,35 +660,17 @@ export class SyncEngine {
   }
 
   /**
-   * push 候选 adapter：
-   * - sections 缺省/空 → 全部 portable（「默认/快速导出」模式）；
-   * - sections 显式给出 → 只取 portable 且命中的（「高级/自定义导出」模式）；
-   *   非 portable / 未知分区 → 警告跳过（安全约束 + 不静默，用户能看见自己勾了哪个无效项）；
-   * - 例外：本次构造显式放行的可选分区（optInSections，见 SyncEngineOptions）作为候选取出。
-   *   缺省空集 → 与改造前逐字等价（可选分区一律不进同步通道）。
+   * push 候选 adapter：缺省 = portable 全量 + 放行的可选分区；显式 sections 只取命中项，非 portable 警告跳过。
+   * issue #146 的「扣下」判定一并解完（`push-skip.ts`）⇒ 过滤只有一处，push 与 previewPush 必然同口径。
    */
-  private pushTargets(
-    sections: readonly SectionId[] | undefined,
-    warnings: string[],
-  ): ConfigAdapter[] {
-    const portable = this.portableAdapters();
-    const optIn = this.optInAdapters();
-    // 默认模式（未指定 sections）：portable 全量 + 本次显式放行的可选分区。
-    // 自动同步的 push() 不带 sections，可选分区能否上榜完全由构造期 optInSections 决定
-    // （scheduler 只传 'auto' 档 → sessions 永不悄悄上行）。
-    if (sections === undefined || sections.length === 0) return [...portable, ...optIn];
-    const byId = new Map(portable.map((a) => [a.id, a]));
-    for (const a of optIn) byId.set(a.id, a);
-    const out: ConfigAdapter[] = [];
-    for (const id of sections) {
-      const adapter = byId.get(id);
-      if (adapter === undefined) {
-        warnings.push(this.msg('sync.skipNonPortable', { section: id }));
-        continue;
-      }
-      out.push(adapter);
-    }
-    return out;
+  private async pushTargets(
+    opts: SyncPushOptions, warnings: string[], load: () => Promise<{ pendingMerge?: PendingMerge }>,
+  ): Promise<PushTargets> {
+    const held = await resolveHeldSections(opts, load);
+    // 两列表分开传是为了 sections 的「非 portable 警告跳过」，候选面仍是 candidateAdapters 的同一批。
+    return resolvePushTargets(this.portableAdapters(), this.optInAdapters(), opts.sections, held, (id) => {
+      warnings.push(this.msg('sync.skipNonPortable', { section: id }));
+    });
   }
 
   /** 结构性断言：凭据/秘密分区绝不进入同步载荷（双保险，portable 过滤之上） */
@@ -875,6 +878,8 @@ export class SyncEngine {
     if (encrypt && (opts.password === undefined || opts.password === '')) {
       throw new Error(this.msg('sync.encryptRequiresPassword'));
     }
+    const loadState = memoAsync(() => loadSyncState(this.stateDir, this.fsx, this.msg));
+    const { targets, held } = await this.pushTargets(opts, warnings, loadState);
     // SYN-02：本轮只列一次远端 index（推进检测 + 继承会话删除墓碑共用；墓碑累积在最新快照里）
     const remoteIndex = await listRemoteSnapshotIndex(this.transport);
     const remoteTombstones = remoteIndex.reason === undefined ? remoteTombstonesOf(remoteIndex.metas) : [];
@@ -889,8 +894,12 @@ export class SyncEngine {
       if (!pre.ok) return { ok: false, snapshotId: '', sections: [], warnings, conflict: true, message: pre.message };
       adopted = pre.adopted;
     }
+    // issue #146：全被冲突扣下 ⇒ 一个分区都不上行。放在前置检测之后：远端已推进时「先同步远端」更该被报出来。
+    if (targets.length === 0 && held.length > 0) {
+      const message = this.msg('sync.pushSkipConflicted', { sections: held.join(', ') });
+      return { ok: true, snapshotId: '', sections: [], warnings: [...warnings, message], message, skipped: 'all-conflicted' };
+    }
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
-    const targets = this.pushTargets(opts.sections, warnings);
     for (const adapter of targets) {
       let section: ExportSection;
       try {
@@ -933,6 +942,7 @@ export class SyncEngine {
     // P1-5 + SYN-02：本机墓碑（上次推过、本机已删）叠加上远端继承的墓碑 ——
     // 不继承的话「A 删 → B 推」会漏掉墓碑，C 带旧快照就能把已删会话复活（删除只在本机传播）。
     const bookkeeping = await this.computeSessionBookkeeping(targets, plainSections, remoteTombstones);
+    const sessionBookkeeping = bookkeeping.tracked ? { sessionUnits: bookkeeping.sessionUnits, deletedSessions: bookkeeping.tombstones } : {};
     if (bookkeeping.deletedNow.length > 0) {
       warnings.push(this.msg('sync.sessionDeletionsRecorded', { count: String(bookkeeping.deletedNow.length) }));
     }
@@ -940,6 +950,9 @@ export class SyncEngine {
       warnings.push(this.msg('sync.sessionTombstonesInherited', { count: String(bookkeeping.inherited) }));
     }
 
+    // issue #146：待裁决只剔除**真正推上去**的分区（导出失败/不在候选里的分区一律保留）。
+    const pushedSections = Object.keys(plainSections) as SectionId[];
+    const pendingAfterPush = await pendingMergeAfterPush(loadState, pushedSections);
     // issue #140：内容没变就**不新建快照**（不 upload、不建目录、不裁剪），只收养远端最新指针。
     // 判据只有一处实现（content-diff.ts）：远端最新快照实际携带的分区哈希 vs 本次导出。
     // - force:true = 用户明确要求「就算一样也新建」（覆盖语义），跳过本判定；
@@ -951,18 +964,16 @@ export class SyncEngine {
       if (diff.reason === 'same-content' && latest !== undefined) {
         await this.recordBaseline(latest.id, plainSections, this.now().toISOString(), {
           remoteSnapshotId: latest.id,
-          // P2：本轮内容已被远端收下（收养 = 远端最新就是本机内容）⇒ 冲突已有结论，清掉待裁决。
-          pendingMerge: null,
+          // P2：本轮内容已被远端收下 ⇒ 待裁决已有结论；但 issue #146 被扣下的分区仍待裁决，绝不一起清掉。
+          pendingMerge: pendingAfterPush,
           // G-44：远端观测必须是**远端快照自己**的 sections，绝不由 state.sections 反推
           remoteSections: latest.sections,
-          ...(bookkeeping.tracked
-            ? { sessionUnits: bookkeeping.sessionUnits, deletedSessions: bookkeeping.tombstones }
-            : {}),
+          ...sessionBookkeeping,
         });
         return {
           ok: true,
           snapshotId: latest.id,
-          sections: Object.keys(plainSections) as SectionId[],
+          sections: pushedSections,
           warnings,
           skipped: 'unchanged',
           adoptedSnapshotId: latest.id,
@@ -986,7 +997,7 @@ export class SyncEngine {
         schemaVersion: CURRENT_SCHEMA_VERSION,
         dshVersion: this.ctx.dshVersion,
         platform: this.ctx.platform as Platform,
-        sectionIds: Object.keys(plainSections) as SectionId[],
+        sectionIds: pushedSections,
         containsSecrets: includeSecrets,
         // 记录触发通道（git/webdav），供同步历史展示「由哪个通道触发」
         transport: this.transport.type,
@@ -1024,21 +1035,19 @@ export class SyncEngine {
       // 不落任何副本的旧行为会让每轮合并都缺共同祖先 → 三方退化成两方、整分区冲突，
       // 用户被迫反复人工裁决。明文通道不受影响（缺省走 writeAncestor 的明文散文件布局）。
       ...(encrypted ? { ancestorPassword: opts.password! } : {}),
-      // 只有本轮真的跟踪了 sessions 才覆盖这两个字段（见 computeSessionBookkeeping）
-      ...(bookkeeping.tracked
-        ? { sessionUnits: bookkeeping.sessionUnits, deletedSessions: bookkeeping.tombstones }
-        : {}),
+      ...sessionBookkeeping,
       // issue #140：远端刚收下的就是这份明文 hash ⇒ 记录远端观测（下一次推送/拉取的内容判定起点）。
       // 加密快照的 sections 恒空 ⇒ 不写（指针一变就清空该字段，判定因此回落 id 比较）。
       ...(encrypted ? {} : { remoteSections: hashSections(plainSections) }),
       // P2：本机配置已经推成远端最新 ⇒ 之前的待裁决已被这次推送消解，不再挂着误导用户。
-      pendingMerge: null,
+      // issue #146：被扣下的分区没推上去，它们的待裁决必须留下（只剔除已推分区）。
+      pendingMerge: pendingAfterPush,
     });
 
     return {
       ok: true,
       snapshotId: id,
-      sections: Object.keys(plainSections) as SectionId[],
+      sections: pushedSections,
       warnings,
       ...(adopted !== undefined ? { adoptedBase: adopted } : {}),
     };
@@ -1071,7 +1080,15 @@ export class SyncEngine {
         credentialsIncluded = false; // 读不到 = 不会带凭据；预览如实显示 false
       }
     }
-    const targets = this.pushTargets(opts.sections, warnings);
+    // 预览最多读一次状态（扣下集合），不需要记忆化 —— 套 memoAsync 只会多一层空壳。
+    const { targets, held } = await this.pushTargets(opts, warnings, () => loadSyncState(this.stateDir, this.fsx, this.msg));
+    if (targets.length === 0) {
+      // issue #146：两种「空目标」必须分开说 —— 全被冲突扣下（不是错误：push 也回 ok:true + skipped）≠ 没有可同步分区。
+      if (held.length > 0) {
+        return { ok: true, sections: [], remoteSnapshotCount: 0, encrypted, credentialsIncluded, skipped: 'all-conflicted', message: this.msg('sync.pushAllConflicted', { sections: held.join(', ') }) };
+      }
+      return { ok: false, sections: [], remoteSnapshotCount: 0, encrypted, credentialsIncluded, message: this.msg('sync.noPortableSections') };
+    }
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
     const counts: Partial<Record<SectionId, number>> = {};
     /** issue #91：本趟只读预览省掉了本地源打包 ⇒ 与基线不可比的分区（不可断言「无变化」） */
@@ -1443,28 +1460,12 @@ export class SyncEngine {
   }
 
   /**
-   * 本地**会进载荷**的配置与上次基线（sync-state.sections hash）相比是否有变化（§3.1 上传「看变化」）。
-   * - 从未同步（sync-state.sections 为空）→ true；
-   * - 任一 pushTargets 分区（portable + 本次放行的可选分区）导出 hash ≠ 基线 → true；
-   * - 全部一致 → false（无本地改动，不上传）。只读本地导出 + sync-state，不碰远端。
-   * 判定集合必须 == 推送载荷集合，且被比较字节必须可复现（细节与实测 → docs/evidence/sync-channel.md）。
+   * 本地**会进载荷**的配置与上次基线相比是否有变化（§3.1，「看变化」）。
+   * 判定集合 == 推送载荷集合（candidateAdapters），字节口径与载荷同源 —— 实现与理由见 local-changes.ts。
    */
   async hasLocalChanges(): Promise<boolean> {
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-    if (Object.keys(state.sections).length === 0) return true;
-    for (const adapter of this.pushTargets(undefined, [])) {
-      let section: ExportSection;
-      try {
-        section = await adapter.export(this.ctx, { includeSecrets: false });
-      } catch {
-        continue; // 单项导出失败不影响判定（与 push 单项跳过语义一致）
-      }
-      const data = isFileSection(adapter.id) ? section.data : sanitizeSectionData(adapter, this.scanner, section.data).sanitized;
-      const recorded = state.sections[adapter.id];
-      if (recorded === undefined) return true; // 基线缺该分区 → 视为有变化
-      if (recorded.hash !== hashSection(data as SectionData)) return true;
-    }
-    return false;
+    return hasLocalSectionChanges({ state, adapters: this.candidateAdapters(), ctx: this.ctx, scanner: this.scanner });
   }
 
   /**
@@ -1590,7 +1591,7 @@ export class SyncEngine {
         if (portableIds.has(id as SectionId)) ancestorPortable[id as SectionId] = data as SectionData;
       }
     }
-    const plan = mergeSections(localSections, remotePortable, ancestorPortable, { deletePlugins: this.deletePlugins });
+    const plan = mergeSections(localSections, remotePortable, ancestorPortable, { deletePlugins: this.deletePlugins, selfPluginName: this.selfPluginName });
     // 结果**经返回值**交给调用方（previewMerge / applyMergeResolutions 都用这一份，不会二次下载）；
     // 这里只留两个进程内备忘：祖先可用性（预览要如实说明「为什么全是冲突」）与三方输入
     // （applyMergeResolutions 要把分区级裁决落回**整分区**数据）。

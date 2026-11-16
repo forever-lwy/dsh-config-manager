@@ -11,29 +11,23 @@ export interface PageChrome {
 }
 export declare function esc(value: string): string;
 /**
- * **只转义、不脱敏**的展示出口：唯一用途是救急台**有意**回传给终端用户的「能力 URL」
- * （启动器从子进程日志抓到的带 token 的认证 URL）。
- *
- * 为什么必须与 esc() 分开（cli-F1）：esc() 先过安全侧 redact()，而 redact 的 URL_QUERY_RE
- * 会把 `?token=…` 的值抹成 ***REDACTED*** —— 那正是认证 URL 的形态，于是页面给出一条必然
- * 401 的死链（/profiles 的「打开实例」入口 + 启动结果页）。这些 URL 与终端里打印的 bootstrap
- * URL 同一性质：只给拿到会话 cookie 的人，本来就该原样可见。
- * 纪律：**只允许**用于本层自己签发/抓取的能力 URL；其余一切文本仍走 esc()。
+ * **只转义、不脱敏**的展示出口：唯一用途是救急台**有意**回传给终端用户的「能力 URL」。
  */
 export declare function escCapability(value: string): string;
 export declare function formatBytes(bytes: number): string;
 type Cell = string | {
     html: string;
 };
+export type NavGroupId = 'status' | 'rescue' | 'inspect';
 /**
- * 救急台的**页面导航表（唯一事实源）**：头部导航与 404 / 405 / 错误页的「可用页面」清单
- * 全部由它派生 —— 此前那三处各写一份、且与现实不一致（把 JSON 自述的 `/healthz` 说成页面，
- * 又漏掉 `/restore` / `/export`）。`/healthz` 是 JSON 自述、不是页面，故不在表内。
+ * 救急台的**页面导航表（唯一事实源）**：处境分组导航与 404 / 405 / 错误页的「可用页面」清单
+ * 全部由它派生 —— 绝不另建第二份页面清单。
  */
 export declare const CONSOLE_PAGE_NAV: ReadonlyArray<{
     key: PageChrome['active'];
     href: string;
     label: string;
+    groups: readonly NavGroupId[];
 }>;
 /** 「可用页面」提示行（404 / 405 / 错误页共用这一份派生结果，不再各写一份）。 */
 export declare function consolePagesHint(): string;
@@ -98,18 +92,12 @@ export interface ActionCard {
     id: string;
     title: string;
     description: string;
+    /** 什么情况下点它（首页建议卡必现一行） */
+    when?: string;
     href: string;
     disabled: boolean;
     disabledReason?: string;
 }
-/**
- * 「确认后执行」表单：放宽的是**展示层**，不是提交语义。
- *
- * 服务端直出的是 `<details open>` + 原始 `<form method="post">`（一次性 token、副作用说明、勾选项
- * 全都在表单里）：禁用 JS 时它就是今天那份可直接提交的纯 HTML。有 JS 且浏览器支持 showModal 时，
- * 客户端脚本才把 details 升级成原生 `<dialog>` —— 提交仍然 POST 到同一个 action、带同一个 token，
- * token 校验顺序（token → 安全门）在服务端一字未改。客户端校验/弹窗只算 UX，不构成任何边界。
- */
 export declare function renderConfirmForm(options: {
     action: string;
     token: string;
@@ -117,6 +105,8 @@ export declare function renderConfirmForm(options: {
     consequence: string;
     submitLabel: string;
     danger: boolean;
+    /** 列表页同屏多个非危险按钮时，除首个外设 true 退为中性次要样式，保单屏唯一主色 */
+    neutral?: boolean;
     checklist?: ReadonlyArray<{
         name: string;
         label: string;

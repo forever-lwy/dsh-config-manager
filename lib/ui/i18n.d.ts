@@ -166,6 +166,7 @@ export declare const uiZh: {
     readonly 'sync.pushFailed': '推送失败';
     readonly 'sync.pushOk': '推送成功（快照 {id}）';
     readonly 'sync.pushSkipped': '内容未变化，已跳过（沿用远端快照 {id}）';
+    readonly 'sync.pushAllConflicted': '未推送任何分区：还有分区待冲突裁决（远端与基线都未改动）';
     readonly 'sync.conflictUnresolved': '冲突项 {id} 必须先选择解决方式（保留当前 / 使用导入）';
     readonly 'sync.pushPreviewHeadline': '将推送 {total} 个分区（{changed} 个有变化）';
     readonly 'sync.pushPreviewEncrypted': '加密快照：载荷将整体加密，各分区相对基线的变化不可比对。';
@@ -447,6 +448,10 @@ export declare const uiZh: {
     readonly 'foreign.lossy.entry-backslash.detail': 'ZIP 条目名里出现在中段的反斜杠不会被拒绝：同一个包在 Windows 目标上会被当作路径分隔符（落成多级目录），在 POSIX 目标上只是一个普通字符。本实现刻意不改这一格式行为；界面无法逐条检查条目名，跨平台导入后请核对这类文件是否落在预期位置。';
     readonly 'foreign.lossy.prompt-persona-reshape.title': 'prompts 的 systemPrompt 形状变化';
     readonly 'foreign.lossy.prompt-persona-reshape.detail': '源里的 systemPrompt 是字符串，导入落盘时写成带 persona 字段的对象：persona 文本无损，字段形状改变。兼容性评分不会为这一条给出原因 —— 它不改变内容，只改变形态。';
+    readonly 'foreign.prompt.header': '请帮我将以下 {source} 配置/会话转换为 DSH 可导入的格式：';
+    readonly 'foreign.prompt.paths': '检测路径：{paths}';
+    readonly 'foreign.prompt.skips': '未自动迁移项：';
+    readonly 'foreign.prompt.failure': '失败原因：{reason}';
     readonly 'export.category.settings': 'DSH 全局设置（namespace 分区，redacted）';
     readonly 'export.category.providers': 'LLM Provider / Model / 默认模型 / BaseURL';
     readonly 'export.category.plugins': '已安装插件清单与启用状态（不含二进制）';

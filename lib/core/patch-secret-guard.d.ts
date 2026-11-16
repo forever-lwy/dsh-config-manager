@@ -38,7 +38,7 @@ export interface PatchSecretGuardResult {
     conservative: boolean;
 }
 /** 解析扫描器路径语法（`a.b[0].c`）→ 路径段；语法不认识返回 null（宁可放过，不误判）。 */
-declare function parsePath(path: string): Segment[] | null;
+export declare function parsePath(path: string): Segment[] | null;
 /** 路径段 → 展示用相对路径（与扫描器语法同形，如 `raw.mcp.args.token`）。 */
 declare function formatPath(segs: readonly Segment[]): string;
 export declare function applyPatchSecretGuard(input: PatchSecretGuardInput): PatchSecretGuardResult;

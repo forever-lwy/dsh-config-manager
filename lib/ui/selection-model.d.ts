@@ -134,8 +134,8 @@ export interface VisibleUnits {
     /** 被折叠的单元数（0 = 已全部渲染） */
     hidden: number;
 }
-/** 单元列表渐进披露：默认只给前 limit 条，`showAll` 为 true 时全量。 */
-export declare function visibleUnits(units: readonly SelectionUnit[], showAll: boolean, limit?: number): VisibleUnits;
+/** 单元列表渐进披露：默认只给前 limit 条；传页数按 pages * limit 分页，传 true 全量。 */
+export declare function visibleUnits(units: readonly SelectionUnit[], showAll: boolean | number, limit?: number): VisibleUnits;
 /**
  * 中段省略（UI-16）：用 `…` 收掉字符串**中段**，保留尾部 —— 会话名 / 路径 / 文件名
  * 的区分信息通常在尾部（时间戳、版本、扩展名），尾部截断会让两条记录看起来一模一样

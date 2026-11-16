@@ -69,6 +69,8 @@ function makeScheduler(opts: {
   /** 2026-11-07 事故护栏：注入检测结论（缺省走真实检测，需要真引擎） */
   detectRemoteNew?: (engine: SyncEngine, listed?: readonly SyncSnapshotMeta[]) => Promise<boolean>;
   detectLocalChange?: (engine: SyncEngine) => Promise<boolean>;
+  /** issue #146 F9：磁盘上仍在等裁决的分区（缺省空 ⇒ 判定只看本轮冲突，且不碰真实 sync-state）。 */
+  pendingMerge?: readonly SectionId[];
 }) {
   const runs = new RunRegistry();
   const entries: AutosyncHistoryEntry[] = [...opts.history];
@@ -88,6 +90,7 @@ function makeScheduler(opts: {
     ...(opts.mutationLock !== undefined ? { mutationLock: opts.mutationLock } : {}),
     ...(opts.detectRemoteNew !== undefined ? { detectRemoteNew: opts.detectRemoteNew } : {}),
     ...(opts.detectLocalChange !== undefined ? { detectLocalChange: opts.detectLocalChange } : {}),
+    readPendingMerge: async () => opts.pendingMerge ?? [],
     // 测试不用真实定时器：不调 start()
   });
   return { scheduler, runs, getConfig: () => config, getEntries: () => entries };
@@ -463,6 +466,66 @@ test('SYN-05：非首轮 + 远端无新快照 + 显式 local → 尊重用户选
   assert.equal(decision.forcedAsk, false);
 });
 
+test('SYN-05（#146 F9）：显式 local 且本轮无新冲突，但磁盘上还有待裁决 → 照样 force', () => {
+  const decision = resolveConflictPushPolicy({
+    configuredPolicy: 'local', firstRun: false, remoteNew: false, conflicted: 0, held: 3,
+  });
+  assert.equal(decision.force, true, 'local 是长期决定：存量待裁决不能永远等一个不会再来的「本轮冲突」');
+  assert.equal(decision.forcedAsk, false);
+});
+
+test('SYN-05（#146 F9）：存量待裁决也过不了「首轮 / 远端有新快照」两道高危闸', () => {
+  for (const args of [
+    { firstRun: true, remoteNew: false },
+    { firstRun: false, remoteNew: true },
+  ]) {
+    const decision = resolveConflictPushPolicy({
+      configuredPolicy: 'local', conflicted: 0, held: 3, ...args,
+    });
+    assert.equal(decision.force, false, '高危时刻绝不因存量就覆盖远端最新');
+    assert.equal(decision.forcedAsk, true, '降级必须留痕');
+  }
+});
+
+test('SYN-05（#146 F9）：ask 策略不因存量待裁决而 force（只有显式 local 才覆盖远端）', () => {
+  const decision = resolveConflictPushPolicy({
+    configuredPolicy: 'ask', firstRun: false, remoteNew: false, conflicted: 0, held: 3,
+  });
+  assert.equal(decision.force, false);
+  assert.equal(decision.forcedAsk, false);
+});
+
+test('SYN-05（#146 F9）：显式 local + 只剩磁盘存量 → 真的推上去，并逐条记「本机已覆盖远端」', async () => {
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0,
+    conflictPolicy: 'local', lastRunAt: '2026-11-01T10:00:00.000Z',
+  };
+  const pushCalls: Array<{ force?: boolean; skipSections?: readonly SectionId[] } | undefined> = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async (opts?: { force?: boolean; skipSections?: readonly SectionId[] }) => {
+      pushCalls.push(opts);
+      return { ok: true, snapshotId: 'snap-up', sections: ['plugins' as SectionId], warnings: [] };
+    },
+  };
+  const { scheduler, getEntries, getConfig } = makeScheduler({
+    cfg, engine, history: [], pendingMerge: ['plugins'],
+  });
+  const result = await scheduler.runOnce('git');
+  assert.equal(pushCalls.length, 1, '存量待裁决不能把这一轮变成「什么都不做」');
+  assert.equal(pushCalls[0]?.force, true, '用户的 local 必须真的消解存量');
+  assert.deepEqual(pushCalls[0]?.skipSections, [], 'force = 整段覆盖：不再扣任何分区');
+  assert.equal(result.status, 'partial', '覆盖了远端就不能报成干净的成功');
+  assert.equal(result.skipReason, 'conflict-kept-local');
+  assert.deepEqual(result.conflictedSections, ['plugins'], '台账必须点名被「本机优先」消解的分区');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict-kept-local');
+  assert.ok(
+    getEntries().some((e) => e.skipReason === 'conflict-kept-local' && e.status === 'partial'),
+    '历史同样留痕（界面按码取字典）',
+  );
+});
+
 test('issue #79 + conflictPolicy=ask：冲突只挡下行，绝不强推覆盖远端（partial + skipped 码 conflict）', async () => {
   const cfg: AutosyncConfig = {
     enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 1,
@@ -611,6 +674,41 @@ test('runOnce: 完整双向 → 无冲突合并写本地 + push', async () => {
   assert.ok(getEntries().some((e) => e.status === 'success' && e.direction === 'both'), '写入双向成功历史');
 });
 
+test('#146（follow-up）：引擎回 skipped:all-conflicted → 台账不得记成「上传·成功」', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const heldPush = async (): Promise<Partial<import('./sync-engine.ts').SyncPushReport>> => ({
+    ok: true, snapshotId: '', sections: [] as never,
+    skipped: 'all-conflicted',
+    warnings: ['待裁决冲突未处理：plugins'],
+    message: '待裁决冲突未处理：plugins',
+  });
+  // ① 下行有落地、上行一个分区都没推 → partial，原因写 all-conflicted，引擎告警必须上屏
+  const engine1 = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({ ok: true, applied: ['settings'], restoreId: 'r1', rolledBack: false, review: [], warnings: [] }),
+    push: heldPush as never,
+  };
+  const a = makeScheduler({ cfg, engine: engine1, history: [] });
+  const partial = await a.scheduler.runOnce('git');
+  assert.equal(partial.status, 'partial', '被扣下不是成功：用户会从 success 得出「两端一样了」');
+  assert.equal(partial.skipReason, 'all-conflicted');
+  assert.equal(partial.pushedSnapshotId, undefined, '没推任何东西就不许带快照 id');
+  assert.ok((partial.warnings ?? []).includes('待裁决冲突未处理：plugins'), '扣下说明必须进结果（绝不静默少推）');
+  const entry1 = a.getEntries().at(-1);
+  assert.equal(entry1?.skipReason, 'all-conflicted', '历史条目同样要带原因，界面才说得清');
+  assert.ok((entry1?.warnings ?? []).length > 0, '历史条目也要留告警');
+
+  // ② 下行也没落地（applied 为空）→ 「成功但跳过」，与失败的区分必须保留
+  const engine2 = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({ ok: true, applied: [], restoreId: 'r1', rolledBack: false, review: [], warnings: [] }),
+    push: heldPush as never,
+  };
+  const b = makeScheduler({ cfg, engine: engine2, history: [] });
+  const skipped = await b.scheduler.runOnce('git');
+  assert.equal(skipped.status, 'skipped', '一个分区都没上行 = 成功但跳过（不是 failed，也不是 success）');
+  assert.equal(skipped.skipReason, 'all-conflicted');
+});
 test('runOnce: startup 变体 → 只做 pull 合并，不上传', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const pushCalls: string[] = [];

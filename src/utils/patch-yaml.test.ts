@@ -229,7 +229,7 @@ test('接线守卫：patch 门面与 boot-safety 的 YAML 解析都必须走本�
 
   assert.ok(facade.includes('doc = loadPatchDocument(text)'), 'readPatchLines 必须用方言载入');
   assert.ok(facade.includes('doc = loadPatchDocument(existing)'), 'applyPatchChanges 必须用方言载入既有文件');
-  assert.match(facade, /\+ dumpPatchDocument\((out|plan\.items)\)/, '写回 patch 文件必须用方言（yaml.dump 会把 {__jsExpr} 写成普通 map）');
+  assert.match(facade, /\+ dumpPatchDocument\((out|items|plan\.items)\)/, '写回 patch 文件必须用方言（yaml.dump 会把 {__jsExpr} 写成普通 map）');
   assert.match(
     index,
     /parseYaml:\s*\(text\)\s*=>\s*loadPatchDocument\(text\)/,

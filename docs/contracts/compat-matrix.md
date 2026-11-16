@@ -3,7 +3,7 @@
 > 本文件回答一个问题：**本插件支持哪个 DSH 版本区间，以及 DSH 升级时哪一部分会先破。**
 > 所有断言均标注取证位置（`file:line`）或标记为「未验证」。凡未实际读取文件确认的结论一律不写入本文件。
 
-- 适用插件版本：`dsh-config-manager@0.9.1`（本 fork 包名为 `@forever-lwy/dsh-config-manager`，与 `package.json`、`src/index.ts` 一致）
+- 适用插件版本：`dsh-config-manager@0.10.1`（本 fork 包名为 `@forever-lwy/dsh-config-manager`，与 `package.json`、`src/index.ts` 一致）
 - 本 fork 构建与回归基线：DSH `0.2.2-rc.3`；`engines.dsh = "*"`，DSH peer 只保留开放下限；下文保留上游历史取证。
 - 取证环境：Windows，Node `v24.13.0`，npm `11.19.0`
 - 本机 DSH 部署：`@deepseek-ai/dsh@0.1.5-rc.1`（`D:\Apps\nodejs\node_global\node_modules\@deepseek-ai\dsh\package.json`）

@@ -8,7 +8,14 @@ export interface PendingMergeDeps {
     fsx: SnapshotFs;
     msg: MsgFunc;
 }
-/** 组装待裁决记录：同一远端快照上的连续待裁决**保留首次时间**（界面据此讲「挂了多久」）。 */
+/**
+ * 组装待裁决记录：同一远端快照上的连续待裁决**保留首次时间**（界面据此讲「挂了多久」）。
+ *
+ * 分区取**并集**（issue #146 follow-up）：记录同时是「这轮还要扣下哪些分区」的事实源，
+ * 而每轮上报的冲突只是「本轮查出来的那一部分」—— 替换语义会让上一轮的分区凭空消失
+ * （连续两轮 [plugins] → [mcp] 后剩 [mcp]，plugins 下一轮就被整分区推上去）。
+ * 剔除只发生在「真推上去了」（pendingMergeAfterPush / recordBaseline 的 null）。
+ */
 export declare function pendingMergeFor(state: SyncState, remoteSnapshotId: string, sections: SectionId[], nowIso: string): PendingMerge;
 /**
  * 基线纪律的**纯状态**写入（不写祖先副本、不碰远端）：仅在本机没有任何配置写入时使用。

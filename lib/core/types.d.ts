@@ -9,6 +9,7 @@ import type { EncryptionInfo, Manifest, SectionId, WorkspaceRecord } from '../sc
 import type { TombstoneKind } from '../schema/tombstones.ts';
 import type { MutationLockPort } from '../utils/env-lock.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
+import type { PatchChainRead, PatchWriteOutcome } from './patch-chain.ts';
 import type { Logger } from '../utils/logger.ts';
 import type { MsgFunc } from './messages.ts';
 export interface ExportOptions {
@@ -406,7 +407,21 @@ export interface PatchFileFacade {
         raw: unknown;
         operation?: 'insert' | 'update';
     }[]>;
-    applyPatchChanges(file: string, changes: PatchChange[]): Promise<void>;
+    /**
+     * 写回一层 patch 并返回本次的降级记录（issue #144）。
+     *
+     * 返回 `PatchWriteOutcome` 而不是 `void`：请求 insert、但**生效链上已有别的层**提供该 id 时，
+     * 门面会把它降级成顶层覆盖行（否则就是两条 insert 抢同一个 id，插件保存配置时必然报
+     * `overridden by a home patch or command-line overlay`）。调用方据此给用户一条 warning。
+     */
+    applyPatchChanges(file: string, changes: PatchChange[]): Promise<PatchWriteOutcome>;
+    /**
+     * 读**整条生效 patch 链**（bundle 层 + profile 层 + home 层）的文档，issue #144。
+     *
+     * 可选能力：老宿主 / 测试替身不实现 ⇒ 调用方的链判据退化为「两层 patch 文件」的旧口径
+     * （fail-open，绝不因为读不到 bundle 层而拒绝写入）。
+     */
+    readPatchChain?(): Promise<PatchChainRead>;
 }
 /**
  * 技能摘要（`ctx.skills.list()` 的返回项；DSH `SkillSummary` 的结构子集）。

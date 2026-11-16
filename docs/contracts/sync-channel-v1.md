@@ -163,7 +163,7 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 | `mode` / `sections` | 缺省 `mode='default'` = 全部 portable 且 `defaultIncluded` 的分区（`src/sync/sync-selection.ts:101`、`:134-139`，此时 `sections` 不参与）；只有 `mode='advanced'` 且 `sections` 非空才以勾选集合为范围 |
 | `sessionsLimit` | `sessions` 勾选时只带「最新 N 个」（按会话日志 mtime 倒序；0 = 不带） |
 | `sessionsInclude` | **显式点名的会话单元**；非空时**优先于 `sessionsLimit`**（用户点名的必须赢） |
-| `deletePlugins` | 缺省 `false`。开启后跟随远端删除插件：只删「共同祖先还有它、远端没有、本机未改过版本」的包，且只在 plugins 分区本轮真正应用那一轮执行（`src/sync/plugin-removals.ts` 的 `planPluginRemovals`）；关着时合并钩子不参与，行为与引入该字段前逐字一致。宿主自身与 `bundlesOnly` 条目永不删 |
+| `deletePlugins` | 缺省 `false`。**只决定删不删，不决定合不合**：plugins 分区**恒参与**按键三方合并（`src/sync/plugin-removals.ts` 的 `mergePluginsSection`：插件按 `name`、patch 行按 `file`+`lineId`、tarball 按 `packageName`、`patchFiles` 按 `relativePath`，`pnpmWorkspace` 走 JSON 三方），与开关无关。开启后跟随远端删除插件：只删「共同祖先还有它、远端没有、本机未改过版本」的包，且只在 plugins 分区本轮真正应用那一轮执行（同文件的 `planPluginRemovals`）；关着时跟随删除降级为「保留本机条目并逐项写 switch-off」，合并本身照常进行（issue #132 的原始实现让关着时退回通用数组合并，issue #145 已修正）。宿主自身与 `bundlesOnly` 条目永不删 |
 | `retention`（远端保留） | 来自 `backup-schedule.json`：远端快照裁剪走 GFS（keepLast/keepMonthly/keepYearly），缺省 = 最近 10 个（与旧硬编码 FIFO 逐字等价） |
 
 ## 6. 云端点通道（s3 / gist）的配置形状与密钥纪律
@@ -262,6 +262,8 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 | apply/合并**失败**（含整体回滚） | **不动** | 失败不是「部分成功」 |
 | apply/合并成功但**仍有未裁决冲突**（或用户 `action='skip'`） | **不动**，并写 `pendingMerge` | 未裁决冲突下一轮必须重新出现，绝不静默丢一侧改动 |
 | 全部裁决完且应用成功 | → 本次远端快照 id，清空 `pendingMerge` | |
+| push 有分区仍在等裁决（`skipSections` 扣下） | **只记已推分区**，被扣分区保持原 hash | 被扣分区不算「已同步」，下一轮照旧需要裁决 |
+| push 全部分区都在等裁决 | **不动** | 返回 `{ ok:true, snapshotId:'', sections:[], skipped:'all-conflicted' }`：零远端写入、零基线变化、`pendingMerge` 原样（`since` 保留） |
 
 - **基线以「实际落地的本地导出」为准**（不是 merged 载荷）：适配器写回时可能自增
   revision 这类派生字段（真机 settings 即如此），拿 merged 载荷记基线会让下一轮把「只有派生字段不同」
@@ -270,6 +272,28 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 - `ancestor` 目录（本地祖先副本）是**可缺失**的：加密快照不发明文副本、副本会被裁剪 —— 缺失时退化为
   两方合并（所有双侧差异呈现为 `conflict`），**绝不上抛成整轮失败**。
 - `pendingMerge` 记录 `{ remoteSnapshotId, sections, since }`（同一远端快照上的连续待裁决保留首次时间）。
+- **推送目标必须减去待裁决分区**：`skipSections` **不传** = 不扣（手动推送照旧）；**传了（含空数组）就扣** ——
+  实际扣下 = 点名分区 ∪ 磁盘上 `pendingMerge.sections`（自动同步本轮没判出新冲突时也必须传空数组，否则上一轮
+  留下的待裁决会在别的分区有改动时被推上去）。`force` 不扣。同一集合也用于 `previewPush()`（预览 = 实际）。
+  推送成功后 `pendingMerge` 只剔除**真正推上去**的分区（不在候选里的分区记录保留）。
+  `skipped:'all-conflicted'` 是**成功但什么都没做**，界面不得显示成「已推送」。
+  预览与 push 同口径：`previewPush()` 全被扣下时返回 `{ ok:true, skipped:'all-conflicted', sections:[] }`
+  （`ok:false` 只留给「没有任何可同步分区」），两种空目标文案不同。
+  「同口径」只在**同一份 `opts`** 下成立；跨入口的差异全部来自调用方传没传 `skipSections`，四个生产入口：
+
+  | 入口 | 传参 | 与磁盘待裁决的关系 |
+  |---|---|---|
+  | 自动同步 Phase C（`autosync-scheduler.ts`） | 本轮 `heldUp` 分区 | 显式点名 ∪ 磁盘 |
+  | GUI 立即推送（`routes/sync.ts` 的 push） | `[]` | 读磁盘：没裁决过的分区一律不上行 |
+  | GUI 预览（`routes/sync.ts` 的 previewPush） | `[]` | 与上面的实推同集合 |
+  | agent `config_sync_push`（`core/model-tools.ts`） | `[]` | 同上（模型不掌握待裁决，不能替用户裁决） |
+
+  `force:true` 恒不扣（强推 = 用户明确覆盖）；`skipped:'all-conflicted'` 在自动同步台账里必须落成
+  「成功但跳过 + 原因」，不得记成 `success`/`direction:'push'`。
+- **`conflictPolicy='local'` 的触发条件是「本轮冲突 ∪ 磁盘 `pendingMerge.sections`」**：local 是用户的长期决定，
+  只对本轮新冲突生效会让存量待裁决永远等一个不会再来的「本轮冲突」——既不推也不报错地空转（issue #146 F9）。
+  存量被 force 消解时台账记 `skipReason='conflict-kept-local'` 并列出被覆盖的分区（`conflictedSections`），
+  状态 `partial`（覆盖了远端就不是干净的成功）。首轮 / 远端有新快照两道高危闸不变：即使有存量也降级 `ask`（`forced=true`）。
 
 ### 7.4 push 前置：远端推进检测与 `force`
 

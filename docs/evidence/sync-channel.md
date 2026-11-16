@@ -601,7 +601,19 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 - **undo**：成功卸载后把 `{name, version, target}` 写入当轮兜底快照的 `snapshot.pluginRemovals`（`SnapshotStore.recordPluginRemovals()`，`src/core/backup.ts:971`；**有意不进 `computeMetadataHash`**，否则要重写 manifest/blob 校验）。恢复侧新增对称分支 `pluginInstall`（`src/core/restore.ts:740-762` 计划、`1077-1090` 执行，`defaultPluginInstaller` = `dsh plugin add name@version`）；**只认记录过的名字**，不按 `beforePlugins` 差集反推（手动卸载/换包也会让基线名字消失，按差集重装等于替用户改主意）。
 - **开关**：`SyncSelection.deletePlugins`（`src/sync/sync-selection.ts:70`）缺省 `false`，落在落盘白名单里（`:261`，漏写会静默丢字段）；`makeSyncEngine` 注入 `SyncEngineOptions.deletePlugins` 与 `selfPluginName`（`src/index.ts:2774`、`:2776`）；`/sync/selection` 只认 `body.deletePlugins === true`（`src/routes/sync.ts:1225`）；UI 开关落在同步分区选择弹窗的 plugins 行（只在勾了 plugins 分区时才出现）。
 
+**语义修正（issue #145，2026-11-15）**：上一条里的「开关关 → `switch-off`」只约束**删除**，不约束**合并** —— `mergePluginsSection` 恒参与（按名/按 patch 行/按包名/按路径逐条三方），开关关着时只是「跟随删除」降级成「保留本机条目并记 switch-off」。原实现把 `hooks.deletePlugins !== true` 当成合并钩子的总闸（并且额外用 `sameShell` 比整个外壳），于是默认配置下「本机新装 Y + 远端删 X」会被通用 JSON 合并判成整分区冲突；报告者 issue #145 里那条「导出侧脱敏让 `sameShell` 恒假」是同一处的第二个触发器（本机导出 patch 行带 `redactedPaths`、密钥叶子被剥成空串，远端/祖先明文且无该字段 ⇒ `JSON.stringify` 恒不等）。现在身份比较先把三侧 `redactedPaths` 并集路径的叶子抹平（`src/sync/patch-line-identity.ts`，只用于比较，输出仍取原对象、`redactedPaths` 原样保留，`src/core/patch-secret-guard.ts` 的写回保护照旧生效）。
+
 **守卫（一条一个测试，已全部落地）**：A 卸载 → B 删除 / B 新装不删 / B 改版不删且报冲突 / 开关关不删且逐项 warning / 开关开 → 手动与自动都删且落 undo + 报告列明 / `bundlesOnly` 与本插件自身不删 / 祖先缺失不删 / 删除失败逐项 warning 不阻断 / `desktop` 档案被拒记 warning 不阻断 / 回滚能重装被删插件 —— 覆盖在 `src/sync/plugin-removals.test.ts`（判据 16 例）、`src/sync/sync-engine.test.ts`（引擎行为 6 例 + 单通道源码守卫）、`src/core/restore-plugin-install.test.ts`（undo 三例）、`src/sync/sync-selection.test.ts`（开关持久化）。
+
+**复审修正（2026-11-15，同一轮实现内，报告者 review 后）**：
+
+- **合并必须收敛**：`pnpmWorkspace` 的 `null` 是合法值（adapter 没有 patch 组时就导出 `null`），三方合并后按原始形态写回（`wsCarried = 'pnpmWorkspace' in l || 'pnpmWorkspace' in r`，只有「两侧都没这个键」才删键）。原实现三侧 `null` 一律删键 ⇒ 合并结果与两侧散列都不等 ⇒ 每轮 `decision:'merge'`、永不收敛。
+- **本机启停不被远端版本覆盖**：`plugins` 的按键合并带 `compose`（`{ ...remote, enabled: local.enabled }`）—— 「本机没改过这一条」才走采纳远端的分支，版本/来源听远端，启停这种本机 UI 态恒留本机。
+- **开关只管插件清单**：`patch` / `localTarballs` / `patchFiles` 的 `followDelete` 恒 `false`；`deletePlugins` 的语义是「远端删了插件」，不是「远端删了 MCP 配置」。
+- **畸形形状退回通用路径**：`KeyedMergeResult.malformed`（同键重复 / 空键 / 非对象条目）任一命中 → `mergePluginsSection` 返回 `undefined`，绝不「留一条丢一条」。
+- **可维护性**：patch 冲突路径带行号 `patch.<file>#<lineId>`（同文件两行可分辨）；合并基底改 `{ ...r, ...l }`（远端独有的将来字段不被本机形状吞掉）；`keepLocal` 命中只在本机与远端确实不同时计合并点；删掉无人读取的 `keptAgainstDelete`（信息已由 `planPluginRemovals` 的 `switch-off` 项承担）。
+- **身份计算不逐条重算**：`mergeKeyedList` 增 `identityContextOf(peers)`（每键算一次，patch 用它把三侧 `redactedPaths` 并集解析成路径段）＋ 按键内条目 memo；`src/sync/patch-line-identity.ts` 的路径解析带 512 条封顶缓存（路径串来自载荷 ⇒ 满即整体清空，不随行数增长）。同一临时基准脚本（用完即删，未入库，500 行三侧、每侧一次身份）：改动前 2.61 ms/轮 → 1.32 ms/轮（带上下文）、1.54 ms/轮（走完整 `mergeKeyedList`）。缓存只改「算几次」不改「算出什么」：`src/sync/patch-line-identity.test.ts` 钉住带/不带上下文与冷/热缓存结果逐字相等、入参 `raw` 不被改写、非法路径仍放过。
+- 守卫：`node --test src/sync/merge-keyed.test.ts src/sync/plugin-removals.test.ts src/sync/patch-line-identity.test.ts` → 53 pass / 0 fail；`node --test src/sync/*.test.ts tests/sync-merge/*.test.ts` → 694 pass（2026-11-15 复审时数）。
 
 ## 脱敏剥空的 patch 行值会静默覆盖本机明文（issue #136，2026-11-13 修复）
 
@@ -675,3 +687,40 @@ $ node --test "tests/conformance/*.test.ts"             -> # pass 18  # fail 0
 脱敏密钥空值即使整行确认也保留；相同端点的 provider 只有在导入引用既未配置、也无解密值或补录值时，才保留本机已配置引用。历史快照选择不跨刷新保存，普通同步复位到最新。Windows 安装子进程无显式代理时读取已启用的静态系统代理；不改系统设置，读取有上限。自动同步的凭据策略不变，含密钥迁移仍需手动加密导出。
 
 SDK 对齐 rc.3 后，会话复验首先使用运行时锚点树；插件自身依赖树仅能在同一权威根下回退，避免相同格式版本但不同 codec 实现覆盖显式目标。相关回归在 `session-verify.test.ts`。
+
+同步上游 0.10.0 时，整链识别与降级写入仍放在抽出的 `src/utils/dsh-patch-file.ts`。宿主安装目录中的内置 bundle 可能不在 profile 的 node_modules 中，写路径将已安装宿主的基础条目合入判定链；模块名校正后再调用真实合并器校验。成功写入使链缓存失效；返回的降级记录与密钥保留告警合并展示。相关验证包含 `dsh-patch-startup.test.ts` 的旧 Web 模块名迁移用例。
+
+## 未裁决冲突的分区被自动推送一路压小（issue #146，2026-11-15 真机 + 本地复现）
+
+现场：git 通道 + autosync（interval 60m / realtime true / remoteCheckMs 300000 / conflictPolicy `ask`），两台机
+deviceId 不同；34 条快照历史里 `plugins/plugins.json` 被反复压小（30 → 28 → 26），且没有任何一步报错。
+
+- 成因是两处叠加：下行侧 #145 已修的门控只保证「冲突分区不写本地」；**推送侧不认待裁决** ——
+  `pushTargets()` 只按 `sections` 挑分区，于是冲突分区每轮照旧导出本机版本上行，把远端那份覆盖成更小的一份。
+- 判据：「仍在等裁决」的唯一事实源是 `pendingMerge.sections`（不是本轮 merge 结果，也不是基线 hash）。
+  推送目标 = 全量 −（调用方点名 ∪ 磁盘 `pendingMerge.sections`），实现只有一处：
+  `src/sync/push-skip.ts` 的 `resolveHeldSections()`；`force` 不扣（强推就是明确覆盖），`skipSections` **不传**才不扣
+  （手动推送照旧）—— 传空数组也照样按磁盘待裁决扣：自动同步本轮没判出新冲突时同样要传，否则别的分区一有改动
+  就把上一轮的待裁决推上去（这条是 2026-11-15 代码审查发现并补的）。
+- 全扣下必须零副作用：`{ ok:true, snapshotId:'', sections:[], skipped:'all-conflicted' }` —— 不 upload、不建目录、
+  不改基线、不动 `pendingMerge`；且必须放在 `resolvePushBase()` **之后**：远端已推进时仍要如实报 `conflict:true`，
+  不能被「全扣下」吞成「成功」。
+- 部分扣下：基线只记已推分区；`pendingMerge.sections` 只剔除已推分区，`since` 原样保留（同一批待裁决保留首次时间）。
+- `pendingMerge.sections` 写入取**并集**（同一远端快照上）：每轮上报的只是「本轮查出来的那部分」冲突，替换语义会
+  让上一轮的分区凭空消失，下一轮该分区若判无冲突就整分区上行 —— 正是本轮事故的成因链（2026-11-15 审查补充）。
+  剔除只发生在「真推上去了」（`pendingMergeAfterPush` 按已推分区剔 / 全裁决完时置 `null`）。
+- 调度器顺序：`heldUp`（本轮分区级冲突 ∪ 叶级扣下）必须在 `push()` **之前**落盘 —— 引擎推送成功时只在
+  **已有记录**上保留 `since`，推送后再写会按 `lastMergedRemoteSnapshotId` 重算、抹掉首次时间；`pendingRecorded`
+  守卫同时避免冲突分支再写一次。
+- `conflictPolicy='local'` 的 force 判据必须包含磁盘存量（issue #146 F9，2026-11-15 审查发现）：只按本轮
+  `conflicted.length` 判定时，存量待裁决 + 本轮远端无变化 ⇒ `conflicted=0` ⇒ 不 force，同时 `heldUp=[]` 让引擎从磁盘
+  扣下 ⇒ 既不推也不报错，永远「成功空转」，用户切了「本机优先」却对存量无效。判据改为「本轮冲突 + 磁盘
+  `pendingMerge.sections` 条数」，只在策略为 local 时读一次盘（读失败按 0，退回只扣不推）；首轮 / 远端有新快照
+  仍降级 ask。消解存量时台账落 `conflict-kept-local` + `partial` + 点名分区，用户能看出「本机覆盖了谁」。
+  守卫：`src/sync/autosync-scheduler.test.ts`（纯判定三条 + 端到端一条：只剩存量也 force、跳过码与告警齐全）。
+- 读盘失败不得抹掉待裁决：`pendingMergeAfterPush()` 读不到返回 `undefined`（`recordBaseline` 只在 `null` 时删字段）；
+  返回 `null` 等于静默丢弃待裁决记录。
+- 界面/工具面：`skipped:'all-conflicted'` 一律渲染成「未推送任何分区」，绝不显示成「已推送」（`sync-view.ts` 的
+  headline 不插值 `sections`——该分支恒为空数组）。
+- 守卫：`src/sync/push-skip.test.ts`（缺省不扣 / 部分扣下 / 全扣下零副作用 / 未点名仍扣 / force 不扣 /
+  预览同口径 / 读失败只扣点名且保留待裁决）。

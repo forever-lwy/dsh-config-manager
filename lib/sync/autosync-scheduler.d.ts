@@ -60,7 +60,10 @@ export interface AutosyncRunResult {
  *  - **首轮**（从未跑过）或**远端有新快照**：即使显式选了 'local' 也强制降级 ask（forcedAsk）——
  *    这两个时刻正是「远端最新改动只在历史快照里」的事故现场，静默覆盖等于替用户丢数据；
  *    降级记 forced，界面才能说清「这次没按你的 local 走」；
- *  - 只有「显式 local + 非高危时刻 + 真有冲突」才 force。
+ *  - 只有「显式 local + 非高危时刻 + 真有冲突」才 force；
+ *  - 「真有冲突」= **本轮新判出的冲突** ∪ **磁盘上仍在等裁决的分区**（`held`，issue #146 F9）：
+ *    local 是用户的**长期决定**，不能只对本轮新冲突生效 —— 否则上一轮攒下的待裁决永远等不到结论，
+ *    每轮都「不推也不报错」地空转（用户明明选了「本机优先」）。只读条数、不读内容，判定仍是纯函数。
  *
  * 纯函数（无状态、无 I/O）：调度层与单测共用同一份判定，避免两处各写一遍阈值。
  */
@@ -69,6 +72,8 @@ export declare function resolveConflictPushPolicy(args: {
     firstRun: boolean;
     remoteNew: boolean;
     conflicted: number;
+    /** 磁盘上仍在等裁决的分区数（缺省 0 = 只看本轮冲突；读不到状态也按 0 处理，绝不因此 force）。 */
+    held?: number;
 }): {
     policy: AutosyncConflictPolicy;
     force: boolean;
@@ -166,6 +171,12 @@ export interface AutoSyncSchedulerOptions {
     makeWatcher?: (opts: WatcherFactoryOptions) => SyncWatcher;
     /** 触发合并窗口（ms）：连续保存/连续远端探测只跑一轮。缺省 3000。 */
     minTriggerGapMs?: number;
+    /**
+     * 读磁盘上仍在等裁决的分区（issue #146 F9）。缺省读 `<syncDir>/sync-state.json` 的 pendingMerge，
+     * 与 SyncEngine 的 stateDir 同源（装配处两处都是 syncDir）；测试注入内存实现，免碰真实文件。
+     * 读失败 → 空数组（判定退回「只看本轮冲突」的老口径），绝不因为读不到状态就 force。
+     */
+    readPendingMerge?: () => Promise<readonly SectionId[]>;
 }
 export declare class AutoSyncScheduler {
     private readonly syncDir;
@@ -209,6 +220,7 @@ export declare class AutoSyncScheduler {
     private readonly profile;
     private readonly makeWatcher;
     private readonly minTriggerGapMs;
+    private readonly readPendingMerge;
     /** SEC-03：已 warn 过的「地址被拒」成因（键 = 通道 + 成因文本），进程内去重。 */
     private readonly reportedConfigIssues;
     private stopped;

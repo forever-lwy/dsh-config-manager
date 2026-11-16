@@ -1,6 +1,6 @@
 {
   "name": "@forever-lwy/dsh-config-manager",
-  "version": "0.9.1",
+  "version": "0.10.1",
   "license": "MIT",
   "description": "Backup, restore, export, import, migrate and sync your DeepSeek Harness (DSH) configuration: settings, plugins, MCP servers, skills, agent presets and workspaces. One-click migration to another machine. DSH 配置一键备份、恢复、导出、导入、迁移与同步插件。",
   "icon": "./icon.svg",
@@ -209,7 +209,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "schemastery": "^3.18.0",
-    "tsdown": "0.23.5",
+    "tsdown": "0.23.7",
     "typescript": "^7.0.2"
   }
 }

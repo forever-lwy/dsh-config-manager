@@ -1,11 +1,18 @@
 /**
- * #132：同步「跟随远端删除插件」的**唯一判据**与 plugins 分区的按名三方合并。
+ * #132 / #145：同步「跟随远端删除插件」的**唯一判据**，以及 plugins 分区的按键三方合并。
  *
  * 为什么必须单独一个模块：
  *  1. 删除判定是纯逻辑（开关 × 祖先 × 远端 × 本机），散进引擎里既测不了也说不清；
  *  2. plugins 分区不能走通用 JSON 合并 —— `merge.ts` 的 `mergeJsonValues` 对数组一律「两侧都改
  *     且不逐字相等 → 冲突」，而本分区的日常形态恰恰是「A 机卸载了 X、B 机新装了 Y」，通用路径
  *     会把它报成整分区冲突，于是删除永远进不了自动应用（issue #132 的行为表 A→B 走不通）。
+ *
+ * issue #145 把两件事彻底解耦（本条是 #132 的语义修正）：
+ *  - **合并恒参与**：开关不再决定钩子是否介入。以前关着开关 = 整个分区交回通用 JSON 合并，
+ *    于是与卸载无关的改动（patch 行新增一行）也会因为「数组两侧都改」而整分区冲突；
+ *  - **开关只管删除**：`deletePlugins` 只决定「远端删了、本机未改的条目要不要真的删」，关着就
+ *    保留本机条目（包还在盘上，删了也只会下一轮复活）。
+ *  - 外壳条目（patch 行 / 本地 tarball / patch 文件）同一口径：跟随三方合并，删除也受同一个开关。
  *
  * 删除判据（缺一不可，全部满足才删）：
  *  - 开关打开（`SyncSelection.deletePlugins`，缺省关）；
@@ -20,7 +27,7 @@
  * 纯函数、零 I/O：引擎调用它拿计划，UI 调用它拿「将删除」清单。
  */
 import type { SectionData } from '../schema/types.ts';
-import type { GranularMergeOutcome } from './workspace-merge.ts';
+import type { GranularMergeHooks, GranularMergeOutcome } from './workspace-merge.ts';
 /** 一条「该卸载」的结论（version = 祖先/本机一致的版本，用于报告与回滚重装目标）。 */
 export interface PluginRemoval {
     name: string;
@@ -72,19 +79,12 @@ export interface PluginRemovalInput {
 /** 判定「该不该删」。调用方只在 `applied` 含 plugins 时才真正执行。 */
 export declare function planPluginRemovals(input: PluginRemovalInput): PluginRemovalPlan;
 /**
- * plugins 分区的按名三方合并（`merge.ts` 的 `GRANULAR_MERGES.plugins`）。
+ * plugins 分区的按键三方合并（`merge.ts` 的 `GRANULAR_MERGES.plugins`）。
  *
- * 逐名规则与 git 同口径，祖先只用于判断「谁动了它」，绝不猜：
- *  - 两侧都有：身份相同 → 保留；某一侧与祖先相同 → 取另一侧；两侧都变（或没有祖先）→ both-modified 冲突；
- *  - 只有本机：有祖先且与祖先相同 → 跟随远端删除（真删除）；无祖先 → 本机独有，保留；有祖先且不同 →
- *    modify-delete 冲突（用户在 A 机卸载、B 机却升级过它，不能替用户选）；
- *  - 只有远端：有祖先且与祖先相同 → 本机删除，跟随（不复活）；无祖先 → 远端独有，采纳；有祖先且不同 →
- *    delete-modify 冲突；
- *  - 两侧都没有：消失。
+ * 逐条规则见 `merge-keyed.ts`；本函数只负责「四条有序集合各用什么键与身份」以及
+ * `pnpmWorkspace` 原文的三方（两侧都改且不同 → overlap 交人工，与通用 JSON 合并同口径）。
  *
- * 插件列表以外的字段不一致时返回 `undefined`：patch 行/pnpm-workspace 有各自的既有口径，
- * 在这里再造一套合并只会和通用路径打架（通用路径会整分区处理，其中包含 plugins 数组的旧行为）。
+ * 形状不认识（`version !== 1` 或缺 plugins 数组）时返回 `undefined`：畸形数据交回通用路径的
+ * 形状闸门，这里不另造第二套拒绝逻辑。
  */
-export declare function mergePluginsSection(local: SectionData, remote: SectionData, ancestor: SectionData | undefined, hooks?: {
-    deletePlugins?: boolean;
-}): GranularMergeOutcome | undefined;
+export declare function mergePluginsSection(local: SectionData, remote: SectionData, ancestor: SectionData | undefined, hooks?: GranularMergeHooks): GranularMergeOutcome | undefined;

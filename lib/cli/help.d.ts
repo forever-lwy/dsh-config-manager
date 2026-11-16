@@ -52,7 +52,7 @@ export interface HelpGroup {
     readonly title: string;
     readonly rows: readonly HelpRow[];
 }
-/** 通用选项（所有命令共有）——命令专属选项只出现在各自的详情页里 */
+/** 通用选项（所有命令共有）——范围仅限少数命令的参数（如 --home 仅用于 web/sessions）写在各自详情页 */
 export declare const GENERAL_OPTIONS: readonly HelpEntry[];
 /** 分组顺序 = 推荐阅读顺序：先诊断、再备份、再修复、最后才是危险的重装 */
 export declare const HELP_GROUPS: readonly HelpGroup[];

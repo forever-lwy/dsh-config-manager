@@ -108,6 +108,14 @@ export interface SyncPushOptions {
         limit?: number;
         include?: string[];
     };
+    /**
+     * 本轮**必须扣下**的分区（issue #146）：未裁决冲突的分区绝不上行。语义看「传没传」，不是「空不空」：
+     * - 不传（`undefined`）= 手动推送：只按本参数扣，**不读磁盘**上的历史待裁决；
+     * - 传了（含空数组）= 本参数 ∥ 磁盘 pendingMerge 一起扣（自动同步必须传，否则上一轮留下的待裁决
+     *   会被任何一轮别的分区的改动顺手推上去 —— #146 的复发路径）；
+     * - `force: true` 时整个扣下语义不生效（强推 = 明确要用本机覆盖远端）。实现见 `push-skip.ts`。
+     */
+    skipSections?: SectionId[];
     /** 加密快照：sections 载荷整体加密（AES-256-GCM），manifest.encrypted=true。
      *  开启时必须提供 password（仅本次调用内存使用，绝不落盘/落日志）。 */
     encrypt?: boolean;
@@ -170,8 +178,9 @@ export interface SyncPushReport {
      * 语义：`ok:true` + 本字段 = 「什么都没做，也不算失败」——未 upload、未建目录、未裁剪；
      * 只是把基线指针**收养**到远端最新快照（`adoptedSnapshotId`），让下一轮判定有正确起点。
      * GUI / 报告必须显式区分它（「内容未变化，已跳过」），不能显示成「已推送 xx」。
+     * issue #146：`all-conflicted` = 一个分区都没推（`ok:true` + `snapshotId:''`，远端与基线都没动），不是失败，但绝不能显示成「已推送」。
      */
-    skipped?: 'unchanged';
+    skipped?: 'unchanged' | 'all-conflicted';
     /** issue #140：`skipped='unchanged'` 时被收养的远端快照 id（= 本次报告里的 snapshotId） */
     adoptedSnapshotId?: string;
 }
@@ -212,6 +221,8 @@ export interface SyncPushPreview {
     encrypted: boolean;
     /** 本次推送是否真的会带上凭据载荷（.credentials.yaml 可读且非空；issue #38） */
     credentialsIncluded: boolean;
+    /** issue #146：与 push 同口径的终态（全被冲突扣下 ⇒ 预览也是「什么都没得推」，不是错误） */
+    skipped?: 'all-conflicted';
     message?: string;
 }
 /** 一键 sync 预览结果（preview() 返回；临时 ZIP 由调用方持有并负责清理）。 */
@@ -411,15 +422,17 @@ export declare class SyncEngine {
      * 「推上去了、拉下来静默没有」）。
      */
     private pullSectionIds;
+    /**
+     * 会进载荷的分区 adapter = portable（受注入范围约束）+ 本次放行的可选分区。
+     * 「哪些分区算数」只留这一处：hasLocalChanges / pullSectionIds / pushTargets 三处各写一份候选集合时，
+     * 漏掉一处就出现「推上去了、拉下来静默没有」或「有改动却判成无变化」（#146 的候选面纪律）。
+     */
+    private candidateAdapters;
     /** 本次显式放行的「可选分区」adapter（空集 = 一个都不放行；顺序跟随 adapters） */
     private optInAdapters;
     /**
-     * push 候选 adapter：
-     * - sections 缺省/空 → 全部 portable（「默认/快速导出」模式）；
-     * - sections 显式给出 → 只取 portable 且命中的（「高级/自定义导出」模式）；
-     *   非 portable / 未知分区 → 警告跳过（安全约束 + 不静默，用户能看见自己勾了哪个无效项）；
-     * - 例外：本次构造显式放行的可选分区（optInSections，见 SyncEngineOptions）作为候选取出。
-     *   缺省空集 → 与改造前逐字等价（可选分区一律不进同步通道）。
+     * push 候选 adapter：缺省 = portable 全量 + 放行的可选分区；显式 sections 只取命中项，非 portable 警告跳过。
+     * issue #146 的「扣下」判定一并解完（`push-skip.ts`）⇒ 过滤只有一处，push 与 previewPush 必然同口径。
      */
     private pushTargets;
     /** 结构性断言：凭据/秘密分区绝不进入同步载荷（双保险，portable 过滤之上） */
@@ -615,11 +628,8 @@ export declare class SyncEngine {
      */
     probe(): Promise<SyncProbeResult>;
     /**
-     * 本地**会进载荷**的配置与上次基线（sync-state.sections hash）相比是否有变化（§3.1 上传「看变化」）。
-     * - 从未同步（sync-state.sections 为空）→ true；
-     * - 任一 pushTargets 分区（portable + 本次放行的可选分区）导出 hash ≠ 基线 → true；
-     * - 全部一致 → false（无本地改动，不上传）。只读本地导出 + sync-state，不碰远端。
-     * 判定集合必须 == 推送载荷集合，且被比较字节必须可复现（细节与实测 → docs/evidence/sync-channel.md）。
+     * 本地**会进载荷**的配置与上次基线相比是否有变化（§3.1，「看变化」）。
+     * 判定集合 == 推送载荷集合（candidateAdapters），字节口径与载荷同源 —— 实现与理由见 local-changes.ts。
      */
     hasLocalChanges(): Promise<boolean>;
     /**

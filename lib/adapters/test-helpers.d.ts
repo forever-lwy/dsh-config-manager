@@ -1,5 +1,6 @@
 import { type Logger } from '../utils/logger.ts';
 import { sha256Hex } from '../utils/hashing.ts';
+import type { PatchChainRead } from '../core/patch-chain.ts';
 import type { CredentialsFacade, FileSystemFacade, HostContext, ImportContext, NamespaceInfo, PatchFileFacade, PluginInfo, PluginsFacade, SettingsFacade, Snapshot, SnapshotStore, WorkspaceFacade } from '../core/types.ts';
 import type { Manifest, WorkspaceRecord } from '../schema/types.ts';
 export declare class MemFs implements FileSystemFacade {
@@ -143,11 +144,24 @@ export declare class MemPatch implements PatchFileFacade {
         lineId: string;
         raw: unknown;
     }[]>;
+    /** issue #144：生效 patch 链（bundle 层 + profile 层 + home 层）。默认空链 = 判据不加强。 */
+    chain: PatchChainRead | null;
+    /** 记录每次写入的动作，供「已存在的 id 必须走 update」这类断言使用。 */
+    actions: {
+        file: string;
+        lineId: string;
+        action: 'insert' | 'update' | 'remove';
+    }[];
+    /** 注入「门面把 insert 降级成覆盖行」的结果（issue #144 兜底路径），默认不降级。 */
+    downgrade: string[];
+    readPatchChain(): Promise<PatchChainRead>;
     applyPatchChanges(file: string, changes: {
         lineId: string;
         raw: unknown;
         action: 'insert' | 'update' | 'remove';
-    }[]): Promise<void>;
+    }[]): Promise<{
+        downgraded: string[];
+    }>;
 }
 export declare class MemSnapshotStore implements SnapshotStore {
     snapshots: Map<string, Snapshot>;

@@ -1240,3 +1240,117 @@ test('#136/C validate：redactedPaths 空数组合法（＝无剥空位置，守
   );
   assert.equal(okSection.valid, true, `合法形状应通过: ${JSON.stringify(okSection.issues)}`);
 });
+
+/* ------------------- issue #144：跨层判据（bundle 层已提供 ⇒ 只能覆盖，不再新增） ------------------- */
+
+const BUNDLE_LAYER = 'bundles:demo-bundle/cordis.patch.yml';
+
+test('issue #144：bundle 层已提供该 id ⇒ patch 计划项是 Update（覆盖），不是 Create（新增）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.patchFile.lines.set('remote-ssh', {
+    lineId: 'remote-ssh',
+    raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { host: 'example' } },
+  });
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['plugins', exported.data]]);
+
+  const dst = makeContext('linux', '/home/bob');
+  dst.patchFile.chain = {
+    sources: [{ file: BUNDLE_LAYER, doc: [{ insert: [{ id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh' }] }] }],
+    failures: [],
+  };
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const item = items.find((i) => i.id === 'patch:remote-ssh');
+  assert.equal(item?.kind, 'Update', '已由 bundle 层提供 → 只能写覆盖行（写成 insert 就是重复条目）');
+  assert.equal(item?.target?.ref, 'remote-ssh');
+  assert.ok(String(item?.detail).includes(BUNDLE_LAYER), `detail 要说清是哪一层提供的: ${item?.detail}`);
+
+  const r = await adapter.applyItem(item!, makeImportContext(dst, sections));
+  assert.equal(r.ok, true);
+  assert.equal(dst.patchFile.actions.at(-1)?.action, 'update', '落盘动作必须是 update（insert = 第二条新增）');
+});
+
+test('issue #144：链上没人提供该 id ⇒ 计划项仍是 Create（新增语义不变）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.patchFile.lines.set('brand-new', { lineId: 'brand-new', raw: { id: 'brand-new', name: 'pkg-new' } });
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['plugins', exported.data]]);
+
+  const dst = makeContext('linux', '/home/bob');
+  dst.patchFile.chain = { sources: [{ file: BUNDLE_LAYER, doc: [{ insert: [{ id: 'other', name: 'pkg-other' }] }] }], failures: [] };
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const item = items.find((i) => i.id === 'patch:brand-new');
+  assert.equal(item?.kind, 'Create');
+
+  const r = await adapter.applyItem(item!, makeImportContext(dst, sections));
+  assert.equal(r.ok, true);
+  assert.equal(dst.patchFile.actions.at(-1)?.action, 'insert');
+});
+
+test('#144 门面降级 + 密钥保留必须并列报（早退会让安全告警静默消失）', async () => {
+  const localSecret = 'sk-LOCAL-COMBINED-144'
+  const dst = makeContext('linux', '/home/bob', 'web')
+  dst.patchFile.lines.set('line-a', {
+    lineId: 'line-a',
+    raw: { id: 'line-a', config: { apiKey: localSecret, baseURL: 'https://old.example' } },
+  })
+  // 门面发现该 id 已被别的层提供：本次 insert 只能降级成覆盖行
+  dst.patchFile.downgrade = ['line-a']
+  const data = redactedSection('line-a', { id: 'line-a', config: { apiKey: '', baseURL: 'https://new.example' } }, ['raw.config.apiKey'])
+  const applied = await new PluginsAdapter().applyItem(patchItem('line-a'), makeImportContext(dst, new Map([['plugins', data]])))
+
+  assert.equal(applied.ok, true)
+  assert.equal(applied.warning, true)
+  assert.ok(applied.message?.includes('覆盖行'), `必须报出降级事实: ${applied.message}`)
+  assert.ok(applied.message?.includes('raw.config.apiKey'), `密钥保留告警不得被降级早退吞掉: ${applied.message}`)
+  assert.ok(!applied.message?.includes(localSecret), '告警不得带本机密钥值')
+})
+
+test('#144 存量重复 insert：本层与别的层都以 insert 提供同 id ⇒ 计划项是 Warning，不是「无变化」', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice')
+  src.patchFile.lines.set('remote-ssh', {
+    lineId: 'remote-ssh',
+    raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { host: 'example' } },
+  })
+  const adapter = new PluginsAdapter()
+  const exported = await adapter.export(src, { includeSecrets: false })
+  const sections = new Map([['plugins', exported.data]])
+
+  const dst = makeContext('linux', '/home/bob')
+  // 0.9.0 写坏的样子：target 层与 bundle 层都是 insert，内容**完全相同**
+  dst.patchFile.lines.set('remote-ssh', {
+    lineId: 'remote-ssh',
+    raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh' },
+  })
+  const insertDoc = [{ insert: [{ id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh' }] }]
+  dst.patchFile.chain = {
+    // 真机的链包含本层（profile 层）自己：本层与 bundle 层**都是 insert** 才是坏状态
+    sources: [
+      { file: BUNDLE_LAYER, doc: insertDoc },
+      { file: 'cordis.patch.yml', doc: insertDoc },
+      { file: 'profiles/web/cordis.patch.yml', doc: insertDoc },
+    ],
+    failures: [],
+  }
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections))
+  const item = items.find((i) => i.id === 'patch:remote-ssh')
+  assert.equal(item?.kind, 'Warning', '两条新增本身就是要修的东西，不能报「无变化」让人以为没事')
+  assert.ok(String(item?.detail).includes(BUNDLE_LAYER), `detail 要指出另一条 insert 来自哪层: ${item?.detail}`)
+})
+
+test('#144 链有读不出来的层 ⇒ 计划里有 patch-chain:partial 告警（判据缺口必须可见）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice')
+  src.patchFile.lines.set('remote-ssh', { lineId: 'remote-ssh', raw: { id: 'remote-ssh' } })
+  const adapter = new PluginsAdapter()
+  const exported = await adapter.export(src, { includeSecrets: false })
+  const sections = new Map([['plugins', exported.data]])
+
+  const dst = makeContext('linux', '/home/bob')
+  dst.patchFile.chain = { sources: [], failures: [{ file: 'bundles:missing-bundle', reason: 'package not installed in this profile' }] }
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections))
+  const partial = items.find((i) => i.id === 'patch-chain:partial')
+  assert.equal(partial?.kind, 'Warning')
+  assert.ok(String(partial?.description).includes('missing-bundle'), '要说清哪层读不出来')
+})

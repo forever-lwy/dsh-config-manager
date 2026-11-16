@@ -53,12 +53,13 @@ class MemPatchFile implements PatchFileFacade {
     const bucket = this.byFile.get(file);
     return bucket === undefined ? [] : [...bucket.values()];
   }
-  async applyPatchChanges(file: string, changes: PatchChange[]): Promise<void> {
+  async applyPatchChanges(file: string, changes: PatchChange[]): Promise<{ downgraded: string[] }> {
     const bucket = this.bucket(file);
     for (const c of changes) {
       if (c.action === 'remove') bucket.delete(c.lineId);
       else bucket.set(c.lineId, { lineId: c.lineId, raw: c.raw });
     }
+    return { downgraded: [] };
   }
 }
 
@@ -1065,7 +1066,7 @@ test('#133 applyPatchChanges：新 id 走 insert 动作时落进 insert 块（�
   }
 })
 
-test('home override of a profile insert keeps its original declaration', async () => {
+test('#133/#144 跨层覆盖：链上已提供（profile 层 insert）的 id 写成顶层行是合法覆盖', async () => {
   const { home, cleanup } = patchHome()
   try {
     mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
@@ -1074,13 +1075,193 @@ test('home override of a profile insert keeps its original declaration', async (
     const before = readFileSync(profileLayer, 'utf8')
     const facade = new DshPatchFileFacade(home, 'web', zhMsg)
 
-    // 用户层此时不存在：写一条与 profile 层 insert 成员同 id 的顶层行 = 跨层语义翻转
-    const err = await facade
-      .applyPatchChanges(USER_PATCH_FILE, [{ lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client' }, action: 'update' }])
-      .then(() => null, (e: unknown) => e as Error)
-    assert.equal(err, null, 'home 层覆盖 profile 层的条目是合法的宿主语义')
-    assert.equal(existsSync(join(home, USER_PATCH_FILE)), true)
+    // 条目已由 profile 层的 insert 提供 ⇒ 顶层行是**覆盖**（宿主认可的形状），不是新增；
+    // issue #144 之前这条被旧判据误拒（判据只问「是不是别的层 insert 过它」，没说清 legal 覆盖）。
+    const outcome = await facade.applyPatchChanges(USER_PATCH_FILE, [
+      { lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client', disabled: true }, action: 'update' },
+    ])
+    assert.deepEqual(outcome.downgraded, [])
+    const text = readFileSync(join(home, USER_PATCH_FILE), 'utf8')
+    assert.match(text, /^- id: '?mcp-a'?$/m, '已存在的 id 只能写顶层覆盖行: ' + text)
+    assert.equal(text.includes('- insert:'), false, '覆盖行不是新增，本层不得插第二份')
     assert.equal(readFileSync(profileLayer, 'utf8'), before, '另一层当然也不许动')
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 孤儿守卫：整条链都没人提供的 id 写成顶层行必须拒写（文件不动）', async () => {
+  const { home, cleanup } = patchHome()
+  try {
+    mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
+    writeFileSync(join(home, 'profiles', 'web', 'cordis.patch.yml'), INSERT_BLOCK_YAML.replace('- id: llm-pi-ai\n  name: "@deepseek-ai/dsh-llm-pi-ai"\n', ''), 'utf8')
+    const profileLayer = join(home, 'profiles', 'web', 'cordis.patch.yml')
+    const before = readFileSync(profileLayer, 'utf8')
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+
+    // 宿主对顶层行只做覆盖：entryMap 查不到 ⇒ patch: entry "ghost" not found 整行丢弃
+    const err = await facade
+      .applyPatchChanges(USER_PATCH_FILE, [{ lineId: 'ghost', raw: { id: 'ghost', config: { x: 1 } }, action: 'update' }])
+      .then(() => null, (e: unknown) => e as Error)
+    assert.ok(err !== null, '没人提供的顶层行必须拒写')
+    assert.match(String(err.message), /ghost/)
+    assert.equal(existsSync(join(home, USER_PATCH_FILE)), false, '拒写 = 用户层文件一个字节都没写')
+    assert.equal(readFileSync(profileLayer, 'utf8'), before, '另一层当然也不许动')
+  } finally {
+    cleanup()
+  }
+})
+
+/* --------------------- issue #144：bundle 层已提供的 id 只能写覆盖行 --------------------- */
+
+/** 真机形态的 bundle 层：`profiles/<p>/package.json` 声明 bundle，包内 `dsh.bundle.patch` 指向 patch 文件。 */
+function bundlePatchHome(): { home: string; cleanup: () => void } {
+  const { home, cleanup } = patchHome()
+  const profileDir = join(home, 'profiles', 'web')
+  const pkgDir = join(profileDir, 'node_modules', 'demo-bundle')
+  mkdirSync(pkgDir, { recursive: true })
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'web-profile', dsh: { profile: { bundles: ['demo-bundle'] } } }), 'utf8')
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'demo-bundle', dsh: { bundle: { patch: 'cordis.patch.yml' } } }), 'utf8')
+  writeFileSync(join(pkgDir, 'cordis.patch.yml'), [
+    '- insert:',
+    '    - id: remote-ssh',
+    '      name: "@zhangfengshun/dsh-remote-ssh"',
+    '',
+  ].join('\n'), 'utf8')
+  return { home, cleanup }
+}
+
+const PROFILE_LAYER = 'profiles/web/cordis.patch.yml'
+
+test('#144 applyPatchChanges：bundle 层已提供的 id 要求 insert 时降级成顶层覆盖行', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    const outcome = await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'remote-ssh', raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { port: 2222 } }, action: 'insert' },
+    ])
+    assert.deepEqual(outcome.downgraded, ['remote-ssh'], '已由 bundle 层提供 → 必须降级，绝不写第二条 insert')
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.equal(text.includes('- insert:'), false, '本层不得再新增一份同 id: ' + text)
+    assert.match(text, /^- id: '?remote-ssh'?$/m, '必须是顶层覆盖行: ' + text)
+    const lines = await facade.readPatchLines(PROFILE_LAYER)
+    assert.equal(lines.length, 1)
+    assert.deepEqual((lines[0]?.raw as { config?: unknown } | undefined)?.config, { port: 2222 })
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 applyPatchChanges：同一个 id 重复写仍只有一行（幂等，不会越写越多）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    const raw = { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { port: 2222 } }
+    await facade.applyPatchChanges(PROFILE_LAYER, [{ lineId: 'remote-ssh', raw, action: 'insert' }])
+    await facade.applyPatchChanges(PROFILE_LAYER, [{ lineId: 'remote-ssh', raw, action: 'insert' }])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.equal(text.match(/^- id:/gm)?.length, 1, '同 id 只能留一行（重复 = 宿主 compose 后 config 变数组）: ' + text)
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 applyPatchChanges：链上没人提供的 id 仍走 insert（新增语义不变）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    const outcome = await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'brand-new', raw: { id: 'brand-new', name: 'pkg-new' }, action: 'insert' },
+    ])
+    assert.deepEqual(outcome.downgraded, [])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.ok(text.includes('- insert:'), '新 id 只能靠 insert 新增（顶层行会被 not found 丢弃）: ' + text)
+    assert.equal(/^- id: '?brand-new'?$/m.test(text), false)
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 readPatchChain：bundle 层按声明读到，缺失的 bundle 只登记 failures', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    writeFileSync(join(home, 'profiles', 'web', 'package.json'), JSON.stringify({ name: 'web-profile', dsh: { profile: { bundles: ['demo-bundle', 'missing-bundle'] } } }), 'utf8')
+    const chain = await new DshPatchFileFacade(home, 'web', zhMsg).readPatchChain()
+    assert.deepEqual(chain.sources.map((s) => s.file), ['bundles:demo-bundle/cordis.patch.yml', PROFILE_LAYER, USER_PATCH_FILE])
+    assert.deepEqual(chain.failures.map((f) => f.file), ['bundles:missing-bundle'])
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 顶层覆盖行的 name 与 bundle 成员对齐（不一致宿主会整行 name mismatch 跳过）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    // 快照来自另一台机器：裸名；bundle 成员是 scoped 名
+    await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'remote-ssh', raw: { id: 'remote-ssh', name: 'dsh-remote-ssh', config: { port: 2222 } }, action: 'insert' },
+    ])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.ok(text.includes("@zhangfengshun/dsh-remote-ssh"), 'name 必须校正成链上既有条目的 name: ' + text)
+    assert.equal(text.includes("name: dsh-remote-ssh"), false, '不得保留来源机的裸名: ' + text)
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 存量修复：本层残留的 insert 成员 + bundle 也提供 ⇒ 写 update 时搬到顶层（不再两条新增）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    // 0.9.0 写坏的样子：本层已经是 insert 成员（bundle 也 insert 同一 id）
+    mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
+    writeFileSync(join(home, PROFILE_LAYER), [
+      '- insert:',
+      '    - id: remote-ssh',
+      '      name: "@zhangfengshun/dsh-remote-ssh"',
+      '',
+    ].join('\n'), 'utf8')
+    const outcome = await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'remote-ssh', raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { port: 2222 } }, action: 'update' },
+    ])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.equal(text.includes('- insert:'), false, '同 id 仍有两条新增 ⇒ 必须搬到顶层: ' + text)
+    assert.match(text, /^- id: '?remote-ssh'?$/m, '顶层覆盖行才是宿主认的形状: ' + text)
+    assert.deepEqual(outcome.downgraded, [], 'action 本来就是 update，不算降级')
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 链有读不出来的层 ⇒ 孤儿守卫不作终审（fail-open，避免永久拒写）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    // missing-bundle 读不到：某个看不见的层可能就是 ghost 的提供者
+    writeFileSync(join(home, 'profiles', 'web', 'package.json'),
+      JSON.stringify({ name: 'web-profile', dsh: { profile: { bundles: ['demo-bundle', 'missing-bundle'] } } }), 'utf8')
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'ghost', raw: { id: 'ghost', config: { a: 1 } }, action: 'update' },
+    ])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.match(text, /^- id: '?ghost'?$/m, '链不完整时按 fail-open 写入: ' + text)
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 写盘后链缓存失效：立刻读到的链包含刚写的行', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    await facade.readPatchChain() // 预热缓存（此时 profile 层为空）
+    await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'remote-ssh', raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { port: 2222 } }, action: 'insert' },
+    ])
+    const chain = await facade.readPatchChain()
+    const profileLayer = chain.sources.find((s) => s.file === PROFILE_LAYER)
+    assert.ok(JSON.stringify(profileLayer?.doc ?? null).includes('remote-ssh'), '写后必须重读，不能拿写前快照: ' + JSON.stringify(chain.sources))
   } finally {
     cleanup()
   }

@@ -1652,6 +1652,7 @@ declare const uiZh: {
   readonly 'sync.pushFailed': '推送失败';
   readonly 'sync.pushOk': '推送成功（快照 {id}）';
   readonly 'sync.pushSkipped': '内容未变化，已跳过（沿用远端快照 {id}）';
+  readonly 'sync.pushAllConflicted': '未推送任何分区：还有分区待冲突裁决（远端与基线都未改动）';
   readonly 'sync.conflictUnresolved': '冲突项 {id} 必须先选择解决方式（保留当前 / 使用导入）';
   readonly 'sync.pushPreviewHeadline': '将推送 {total} 个分区（{changed} 个有变化）';
   readonly 'sync.pushPreviewEncrypted': '加密快照：载荷将整体加密，各分区相对基线的变化不可比对。';
@@ -1933,6 +1934,10 @@ declare const uiZh: {
   readonly 'foreign.lossy.entry-backslash.detail': 'ZIP 条目名里出现在中段的反斜杠不会被拒绝：同一个包在 Windows 目标上会被当作路径分隔符（落成多级目录），在 POSIX 目标上只是一个普通字符。本实现刻意不改这一格式行为；界面无法逐条检查条目名，跨平台导入后请核对这类文件是否落在预期位置。';
   readonly 'foreign.lossy.prompt-persona-reshape.title': 'prompts 的 systemPrompt 形状变化';
   readonly 'foreign.lossy.prompt-persona-reshape.detail': '源里的 systemPrompt 是字符串，导入落盘时写成带 persona 字段的对象：persona 文本无损，字段形状改变。兼容性评分不会为这一条给出原因 —— 它不改变内容，只改变形态。';
+  readonly 'foreign.prompt.header': '请帮我将以下 {source} 配置/会话转换为 DSH 可导入的格式：';
+  readonly 'foreign.prompt.paths': '检测路径：{paths}';
+  readonly 'foreign.prompt.skips': '未自动迁移项：';
+  readonly 'foreign.prompt.failure': '失败原因：{reason}';
   readonly 'export.category.settings': 'DSH 全局设置（namespace 分区，redacted）';
   readonly 'export.category.providers': 'LLM Provider / Model / 默认模型 / BaseURL';
   readonly 'export.category.plugins': '已安装插件清单与启用状态（不含二进制）';
@@ -2434,6 +2439,80 @@ type NativePickResult = {
   reason: NativePickReason;
   detail?: string;
 };
+/** 同步通道类型（由 SYNC_CHANNELS 派生；host 侧与 client 半统一引用）。 */
+type SyncTransportType$1 = (typeof SYNC_CHANNELS)[number];
+/** S3 兼容系通道的回传视图：**只带 secretStored 标记，绝不带密钥值**。 */
+interface CloudS3ChannelView {
+  provider: S3CompatProvider;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  accessKeyId: string;
+  pathStyle: boolean;
+  /** 密钥已在 credentials 里（只回布尔） */
+  secretStored: boolean;
+}
+/** Gist 通道的回传视图：**只带 secretStored 标记，绝不带 token 值**。 */
+interface CloudGistChannelView {
+  provider: GistProvider;
+  gistId: string;
+  apiBaseUrl: string;
+  filePrefix: string;
+  secretStored: boolean;
+}
+/** 推/拉请求体（与 client 的 SyncPushPayload / SyncPullPayload 同形）。 */
+interface SyncPushBody {
+  /**
+   * 请求体 transport：**宿主可接受的通道全集**（`SYNC_CHANNELS` = git/webdav/s3/gist）。
+   *
+   * 为什么是宽集合而不是上面的 `SyncChannelName`：client 的 `SyncPushPayload.transport`
+   * 已是宽集合（云端通道并入 `SYNC_CHANNELS` 后由 `SyncTransportType` 派生），t42 组装器
+   * 的产物会直接喂给 `saveQueueOnRequest` 等以 `SyncPushBody` 为参的纯函数；写窄会让
+   * 「client 宽 → ui 窄」在 typecheck 阶段失败（T0 合并 origin/main 实测 3 条）。
+   * transport 是**线上形状**，宿主按 `isSyncTransportType` 校验，宽集合才是正确口径。
+   */
+  transport?: SyncTransportType$1;
+  repoUrl?: string;
+  /** git：仓库内子目录前缀（issue #131；空 / 缺省 = 仓库根，旧配置读出来即空） */
+  subdir?: string;
+  token?: string;
+  url?: string;
+  username?: string;
+  password?: string;
+  sections?: SectionId[];
+  /**
+   * sessions（可选分区）选项：**只有显式提供它**，会话才被允许进入同步通道
+   * （Host 侧安全默认：未提供则按非 portable 分区跳过）。绝不悄悄携带。
+   */
+  sessions?: {
+    limit?: number;
+    include?: string[];
+  };
+  /** s3：具体兼容商 */
+  provider?: string;
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  prefix?: string;
+  accessKeyId?: string;
+  pathStyle?: boolean;
+  /** 显式覆盖签名方言（高级覆盖；宿主忽略非法值，回落兼容商变体默认） */
+  dialectId?: 'aws4' | 'oss4';
+  /** gist：目标 gist id */
+  gistId?: string;
+  apiBaseUrl?: string;
+  filePrefix?: string;
+  /**
+   * 云端点密钥（s3 的 AccessKey Secret / gist 的 token）：**只写**。
+   * 仅请求体内存传输 → 宿主写入 DSH credentials 槽位（cloudSecretRef）后即丢弃；
+   * 绝不落配置文件 / 日志 / 响应（凭据铁律）。
+   */
+  secret?: string;
+  encrypt?: boolean;
+  encryptPassword?: string;
+  includeSecrets?: boolean;
+}
 /** 超时文案键（全部已存在于 ui/i18n.ts；本模块只做选键，不新增文案口径）。 */
 type TimeoutMessageKey = 'error.requestTimeout' | 'error.fallback' | 'error.exportTimeout' | 'error.syncTimeout' | 'error.recoveryTimeout';
 /** 请求选项：超时档位、超时文案键、调用方取消信号。 */
@@ -2894,7 +2973,7 @@ declare class ConfigManagerApi {
    */
   applyUpdate(version: string): Promise<PluginUpdateApplyResult>;
   /** 迁移前咨询（只读健康评分 + 建议）：对 4 种可迁移源生成统一咨询报告。 */
-  consult(input: {
+  consult(input: SyncPushBody & {
     type: 'export-zip' | 'local-snapshot' | 'remote-snapshot' | 'profile';
     id: string;
     snapshotId?: string;
@@ -2983,8 +3062,9 @@ interface SyncPushReport {
    * 语义：`ok:true` + 本字段 = 「什么都没做，也不算失败」——未 upload、未建目录、未裁剪；
    * 只是把基线指针**收养**到远端最新快照（`adoptedSnapshotId`），让下一轮判定有正确起点。
    * GUI / 报告必须显式区分它（「内容未变化，已跳过」），不能显示成「已推送 xx」。
+   * issue #146：`all-conflicted` = 一个分区都没推（`ok:true` + `snapshotId:''`，远端与基线都没动），不是失败，但绝不能显示成「已推送」。
    */
-  skipped?: 'unchanged';
+  skipped?: 'unchanged' | 'all-conflicted';
   /** issue #140：`skipped='unchanged'` 时被收养的远端快照 id（= 本次报告里的 snapshotId） */
   adoptedSnapshotId?: string;
 }
@@ -3025,29 +3105,9 @@ interface SyncPushPreview {
   encrypted: boolean;
   /** 本次推送是否真的会带上凭据载荷（.credentials.yaml 可读且非空；issue #38） */
   credentialsIncluded: boolean;
+  /** issue #146：与 push 同口径的终态（全被冲突扣下 ⇒ 预览也是「什么都没得推」，不是错误） */
+  skipped?: 'all-conflicted';
   message?: string;
-}
-/** 同步通道类型（由 SYNC_CHANNELS 派生；host 侧与 client 半统一引用）。 */
-type SyncTransportType$1 = (typeof SYNC_CHANNELS)[number];
-/** S3 兼容系通道的回传视图：**只带 secretStored 标记，绝不带密钥值**。 */
-interface CloudS3ChannelView {
-  provider: S3CompatProvider;
-  endpoint: string;
-  region: string;
-  bucket: string;
-  prefix: string;
-  accessKeyId: string;
-  pathStyle: boolean;
-  /** 密钥已在 credentials 里（只回布尔） */
-  secretStored: boolean;
-}
-/** Gist 通道的回传视图：**只带 secretStored 标记，绝不带 token 值**。 */
-interface CloudGistChannelView {
-  provider: GistProvider;
-  gistId: string;
-  apiBaseUrl: string;
-  filePrefix: string;
-  secretStored: boolean;
 }
 /**
  * 远程同步通道类型：git（默认）或 webdav。
@@ -3907,7 +3967,7 @@ declare class SyncApi {
    */
   applyMerge(payload: MergeApplyPayload): Promise<MergeApplyResponse>;
   /** Phase 7 迁移前咨询（只读健康评分 + 建议）：对远端快照生成咨询报告。 */
-  consult(input: {
+  consult(input: SyncPushPayload & {
     type: 'remote-snapshot';
     id: string;
     snapshotId?: string;
@@ -6437,6 +6497,7 @@ declare const zh$4: {
   readonly 'import.paths.kind.homeMismatch': '基础路径不同';
   readonly 'import.paths.unresolved': '还有 {count} 条路径未映射（留空将跳过该路径，可以继续）';
   readonly 'import.paths.empty': '无需映射路径';
+  readonly 'import.paths.applySuggested': '填入建议路径';
   readonly 'import.paths.browse': '选择本机路径';
   readonly 'import.paths.picker.title': '选择本机路径';
   readonly 'import.paths.picker.up': '上一层';
@@ -6472,6 +6533,7 @@ declare const zh$4: {
   readonly 'snapshots.manualHints': '需人工处理';
   readonly 'snapshots.failed': '失败';
   readonly 'snapshots.skipped': '跳过';
+  readonly 'snapshots.preRestoreDir': '恢复前安全备份目录：{dir}';
   readonly 'snapshots.plan.changed': '将被还原 {count}';
   readonly 'snapshots.plan.added': '新增 {count}';
   readonly 'snapshots.plan.deleted': '将被删除 {count}';
@@ -6539,6 +6601,7 @@ declare const zh$4: {
   readonly 'backupSchedule.loading': '加载定时备份设置…';
   readonly 'backupSchedule.error': '定时备份设置加载失败';
   readonly 'retention.title': '保留策略';
+  readonly 'retention.titleScoped': '保留策略（快照 + 定时备份）';
   readonly 'retention.hint': '快照与定时备份共用；置顶快照与未收敛的恢复点恒豁免自动清理。';
   readonly 'retention.keepLast': '最近保留';
   readonly 'retention.keepLastHint': '按时间保留最近 N 份；0 = 不按「最近」保留';
@@ -7032,6 +7095,7 @@ declare const zh$4: {
   readonly 'foreign.skip.trae-db-decrypt-failed': 'Trae 加密会话库无法解密：文件被截断、不是 SQLCipher 形态或读取失败，本次未读出任何会话';
   readonly 'foreign.skip.trae-db-schema-mismatch': 'Trae 加密会话库解密成功但表结构不符（缺 chat_session / history_v2 或必需列）：不猜字段，本次未读出任何会话';
   readonly 'foreign.conflict.policy': '同 id 冲突不覆盖本机内容：跳过并逐条报告';
+  readonly 'foreign.copyAgentPrompt': '复制转换提示词';
 };
 /** 字典键联合（注册处 compile-time 校验） */
 type ConfigManagerKey = keyof typeof zh$4;
@@ -7242,6 +7306,7 @@ declare const zh$3: {
   readonly 'mode.clearSavedPassword': '删除已保存密码';
   readonly 'autosync.title': '自动同步';
   readonly 'autosync.description': '开启后，DSH 在后台保持配置一致：本地配置有改动时自动上传，检测到远端有新快照时才自动拉取合并；定时器仅作兜底轮询，无变化不重复动作。仅在无冲突且无需人工干预时才自动写入本地。';
+  readonly 'autosync.retentionNotice': '远端快照与定时备份共用同一份保留策略（会裁剪旧快照），在首页「定时备份」里设置。';
   readonly 'autosync.enable': '启用';
   readonly 'autosync.interval': '兜底轮询间隔';
   readonly 'autosync.intervalHint': '兜底检查节奏：间隔到点 / DSH 启动时检查远端是否有新快照，有才拉取合并。启用「本地改动即时同步」后，保存配置会立刻触发一轮，不必等这里。';
@@ -7300,6 +7365,7 @@ declare const zh$3: {
   readonly 'history.autosyncReasonUpToDate': '无变化（本地与远端一致）';
   readonly 'history.autosyncReasonWarning': '部分内容未落地（详情见本轮告警）';
   readonly 'history.autosyncReasonUnchanged': '远端无新快照，无需合并';
+  readonly 'history.autosyncReasonAllConflicted': '有分区仍在等冲突裁决，本轮未上传（裁决后会照常推送）';
   readonly 'history.autosyncConflicted': '跳过冲突分区：{sections}';
   readonly 'history.autosyncApplied': '应用分区：{sections}';
   readonly 'history.autosyncError': '错误：{error}';
@@ -7323,6 +7389,7 @@ declare const zh$3: {
   readonly 'toast.pushFailed': '推送失败';
   readonly 'toast.pushDone': '推送完成';
   readonly 'toast.pushSkipped': '内容未变化，已跳过';
+  readonly 'toast.pushAllConflicted': '未推送任何分区：还有分区待冲突裁决';
   readonly 'toast.syncStartFailed': '从远端合并失败';
   readonly 'toast.autosyncUpdateFailed': '自动同步设置更新失败';
   readonly 'toast.autosyncUpdated': '自动同步设置已更新';
@@ -8370,4 +8437,3 @@ export type { AboutPanelProps, ChatKey, ConfigManagerApiError, ConfigManagerKey,
 		return module.exports;
 	}
 });
-//# sourceMappingURL=client.d.ts.map
