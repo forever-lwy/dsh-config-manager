@@ -99,6 +99,7 @@ import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
 import { planSelfUpdate, runSelfUpdate, type SelfUpdateOutcome } from './core/self-update.ts'
 import { createAdapters } from './adapters/index.ts'
 import { DshPatchFileFacade } from './utils/dsh-patch-file.ts'
+import { createPluginModuleResolver } from './utils/plugin-module-resolution.ts'
 export { DshPatchFileFacade } from './utils/dsh-patch-file.ts'
 import { profilePatchRel, readEffectivePatchLines } from './core/patch-layers.ts'
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
@@ -186,7 +187,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-export const PLUGIN_VERSION = '0.10.1'
+export const PLUGIN_VERSION = '0.10.2'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = '@forever-lwy/dsh-config-manager'
@@ -1952,16 +1953,16 @@ export class ConfigManagerHostContext implements HostContext {
     this.settings = new DshSettingsFacade(ctx)
     this.credentials = new DshCredentialsFacade(ctx)
     this.patchFile = new DshPatchFileFacade(homeDir, profile, this.msg, async () => {
-      const { composeEntries, loadProfileDirectory, resolveBundleDir } = await import('@deepseek-ai/dsh-app-boot')
+      const { composeEntries, loadProfileDirectory, resolvePluginResource } = await import('@deepseek-ai/dsh-app-boot')
       const anchor = installAnchor ?? dshPackageJsonCandidates(homeDir, profile).find((path) => existsSync(path))
       if (anchor === undefined) throw new Error(this.msg('host.patchStartupUnavailable'))
       const loaded = loadProfileDirectory(PLUGIN_NAME, this.profileDir!, anchor, { userLayer: false })
       return {
+        bundleLayers: loaded.layers.map((layer) => ({ name: layer.packageName, patches: layer.patches })),
+        bundleFailures: loaded.skippedBundles.map((layer) => ({ file: `bundles:${layer.packageName}`, reason: layer.reason })),
         entries: composeEntries(loaded.layers.map((layer) => layer.patches)),
         compose: (layers, warn) => composeEntries(layers as Parameters<typeof composeEntries>[0], warn),
-        available: (name) => {
-          try { resolveBundleDir(PLUGIN_NAME, name, anchor, this.profileDir!); return true } catch { return false }
-        },
+        available: createPluginModuleResolver([path.join(this.profileDir!, 'package.json'), anchor], resolvePluginResource),
       }
     })
     this.plugins = new DshPluginsFacade(homeDir, profile, this.patchFile, undefined, this.msg)

@@ -89,28 +89,30 @@ export interface PatchDocumentEntry {
 }
 
 /** 读出文档里的全部条目（不判重、保持文档顺序）。 */
-export function patchDocumentEntries(doc: unknown): PatchDocumentEntry[] {
+export function patchDocumentEntries(doc: unknown, recursive = true): PatchDocumentEntry[] {
   const entries: PatchDocumentEntry[] = [];
+  const ancestors = new Set<object>();
+  const add = (raw: unknown, inInsert: boolean): void => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw) || ancestors.has(raw)) return;
+    const obj = raw as Record<string, unknown>;
+    const id = entryId(obj);
+    if (id !== null) entries.push(typeof obj['name'] === 'string' ? { id, name: obj['name'], inInsert } : { id, inInsert });
+    if (recursive && obj['group'] === true && Array.isArray(obj['config'])) {
+      ancestors.add(raw);
+      for (const child of obj['config']) add(child, inInsert);
+      ancestors.delete(raw);
+    }
+  };
   if (!Array.isArray(doc)) return entries;
   for (const item of doc) {
     const members = blockMembers(item);
     if (members !== null) {
       for (const member of members) {
-        const id = entryId(member);
-        if (id === null) continue;
-        const name = member['name'];
-        entries.push(typeof name === 'string'
-          ? { id, name, inInsert: true }
-          : { id, inInsert: true });
+        add(member, true);
       }
       continue;
     }
-    const id = entryId(item);
-    if (id === null) continue;
-    const name = (item as Record<string, unknown>)['name'];
-    entries.push(typeof name === 'string'
-      ? { id, name, inInsert: false }
-      : { id, inInsert: false });
+    add(item, false);
   }
   return entries;
 }
@@ -119,7 +121,7 @@ export function patchDocumentEntries(doc: unknown): PatchDocumentEntry[] {
 export function describePatchDocument(doc: unknown): { insertIds: string[]; topLevelIds: string[] } {
   const insertIds: string[] = [];
   const topLevelIds: string[] = [];
-  for (const entry of patchDocumentEntries(doc)) {
+  for (const entry of patchDocumentEntries(doc, false)) {
     if (entry.inInsert) insertIds.push(entry.id);
     else topLevelIds.push(entry.id);
   }

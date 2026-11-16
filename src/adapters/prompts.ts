@@ -25,6 +25,7 @@ import { locatePatchLineLayer, readEffectivePatchLines, resolveWriteLayer } from
 import { sectionMeta } from '../schema/section-registry.ts';
 import { validateJsonSection } from './json-section.ts';
 import { entryByteSize, filterByUnits } from './units.ts';
+import { patchWriteWarnings } from '../core/patch-chain.ts';
 
 /** 导出记录：PromptEntry 之外记录来源行名与所在层（导入重建 / 写回定位用） */
 export interface PromptExportEntry extends PromptEntry {
@@ -239,11 +240,11 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
         { lineId: ref, raw, action: 'insert' },
       ]);
       // issue #144：降级成覆盖行时必须报出来（落盘形状变了，不能显示成「新增成功」）
-      const createdDowngraded = created.downgraded.length > 0;
+      const notes = patchWriteWarnings(created, msg);
       return {
-        ok: true, warning: createdDowngraded, needsRestart: true,
+        ok: true, warning: notes.length > 0, needsRestart: true,
         message: msg('adapter.promptCreated', { name: prompt.name, ref })
-          + (createdDowngraded ? ' ' + msg('adapter.patchLineDowngraded', { ids: created.downgraded.join(', ') }) : ''),
+          + (notes.length > 0 ? ' ' + notes.join(' ') : ''),
       };
     }
     // Update / Conflict(useImported)：合并进目标行 config
@@ -257,11 +258,11 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
     const written = await ctx.target.patchFile.applyPatchChanges(file, [
       { lineId: ref, raw: newRaw, action: 'update' },
     ]);
-    const writtenDowngraded = written.downgraded.length > 0;
+    const notes = patchWriteWarnings(written, msg);
     return {
-      ok: true, warning: writtenDowngraded, needsRestart: true,
+      ok: true, warning: notes.length > 0, needsRestart: true,
       message: msg('adapter.promptWritten', { name: prompt.name, ref })
-        + (writtenDowngraded ? ' ' + msg('adapter.patchLineDowngraded', { ids: written.downgraded.join(', ') }) : ''),
+        + (notes.length > 0 ? ' ' + notes.join(' ') : ''),
     };
   }
 

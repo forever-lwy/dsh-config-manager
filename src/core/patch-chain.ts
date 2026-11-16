@@ -23,6 +23,7 @@
  * 覆盖行孤儿守卫（整链没人提供该 id ⇒ 拒写）。
  */
 import { patchDocumentEntries } from './patch-document.ts';
+import type { MsgFunc } from './messages.ts';
 
 /** 生效链上的一层：层身份 + 已解析的文档。 */
 export interface PatchChainSource {
@@ -66,6 +67,16 @@ export interface PatchWriteOutcome {
    * （issue #144 的存量修复；正常路径在计划阶段就已判定，这里只是最后一道兜底）。
    */
   downgraded: string[];
+  /** Untouched defects already present before this write; no new defect is permitted. */
+  preexistingInvalid?: string[];
+}
+
+/** All patch adapters report shape changes and untouched startup defects consistently. */
+export function patchWriteWarnings(outcome: PatchWriteOutcome, msg: MsgFunc): string[] {
+  const notes: string[] = [];
+  if (outcome.downgraded.length > 0) notes.push(msg('adapter.patchLineDowngraded', { ids: outcome.downgraded.join(', ') }));
+  if (outcome.preexistingInvalid?.length) notes.push(msg('adapter.patchExistingInvalid', { ids: outcome.preexistingInvalid.join(', ') }));
+  return notes;
 }
 
 /** 把整条链折成 id → 层/形态索引（顺序 = 宿主合并序，先出现者优先记 name）。 */

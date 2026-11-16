@@ -3,7 +3,9 @@ import fs from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { PatchFileFacade } from '../core/types.ts'
 import { zhMsg, type MsgFunc } from '../core/messages.ts'
-import { describePatchDocument, describePatchLayoutDrift, planPatchDocument, PatchStartupInvalidError, unprovidedTopLevelIds } from '../core/patch-document.ts'
+import { describePatchDocument, describePatchLayoutDrift, patchDocumentEntries, planPatchDocument, PatchStartupInvalidError, unprovidedTopLevelIds } from '../core/patch-document.ts'
+import { entryTreeRows, entryTreeIssues, MISSING_ENTRY_ID } from '../core/entry-tree.ts'
+import { reconcileBundleLayers, type BundlePatchLayer, type BundleReconciliation } from '../core/bundle-reconciliation.ts'
 import { alignOverrideNames, patchChainIndex, type PatchChainRead, type PatchWriteOutcome } from '../core/patch-chain.ts'
 import { PatchChainCache, downgradeProvidedInserts, readPatchChainFromProfile } from './patch-chain-read.ts'
 import { isPatchLayerRel, profilePatchRel, USER_PATCH_FILE } from '../core/patch-layers.ts'
@@ -13,6 +15,8 @@ import { isENOENT } from './guards.ts'
 import { isSameOrChild } from './paths.ts'
 
 export interface PatchStartupView {
+  bundleLayers?: BundlePatchLayer[]
+  bundleFailures?: PatchChainRead['failures']
   entries: { id: string; name?: unknown }[]
   compose: (layers: unknown[][], warn: (message: string) => void) => { id: string; name?: unknown }[]
   available: (name: string) => boolean
@@ -147,10 +151,10 @@ export class DshPatchFileFacade implements PatchFileFacade {
     //    gone after restart".
     const other = file === USER_PATCH_FILE ? profilePatchRel(this.profile) : USER_PATCH_FILE
     const otherDoc = await this.readPatchDocQuietly(other, startup !== undefined)
-    const inheritedIds = new Set(startup?.entries.map((entry) => entry.id) ?? [])
+    const inheritedIds = new Set(entryTreeRows(startup?.entries ?? []).flatMap((entry) => typeof entry.id === 'string' ? [entry.id] : []))
     // A home-layer override may legitimately target a profile-layer insert.
     if (file === USER_PATCH_FILE) {
-      for (const id of describePatchDocument(otherDoc).insertIds) inheritedIds.add(id)
+      for (const entry of patchDocumentEntries(otherDoc)) if (entry.inInsert) inheritedIds.add(entry.id)
     }
     const plan = planPatchDocument(doc, effective, inheritedIds)
     const items = chain === null ? plan.items : alignOverrideNames(plan.items, patchChainIndex(chain))
@@ -173,19 +177,28 @@ export class DshPatchFileFacade implements PatchFileFacade {
 
     // Compose the complete startup configuration using the installed host's own merger.
     // Validation runs before atomicWriteFile: a rejected candidate leaves the original intact.
+    const preexistingInvalid: string[] = []
     if (startup !== undefined) {
       const otherItems = Array.isArray(otherDoc) ? otherDoc : []
       const layers = file === USER_PATCH_FILE ? [otherItems, items] : [items, otherItems]
-      const entries = startup.compose([[{ insert: startup.entries }], ...layers], () => {})
-      const seen = new Set<string>()
+      const composed = startup.compose([[{ insert: startup.entries }], ...layers], () => {})
+      const entries = entryTreeRows(composed)
+      const seen = new Set(entries.flatMap((entry) => typeof entry.id === 'string' ? [entry.id] : []))
       const invalid: string[] = []
-      for (const entry of entries) {
-        if (seen.has(entry.id) || typeof entry.name !== 'string' || entry.name === '') invalid.push(entry.id)
-        seen.add(entry.id)
-      }
       const changed = new Set(changes.filter((change) => change.action !== 'remove').map((change) => change.lineId))
+      for (const change of changes) {
+        if (change.action === 'remove') continue
+        for (const entry of entryTreeRows([change.raw])) changed.add(typeof entry.id === 'string' && entry.id !== '' ? entry.id : MISSING_ENTRY_ID)
+      }
+      const originalItems = Array.isArray(doc) ? doc : []
+      const beforeLayers = file === USER_PATCH_FILE ? [otherItems, originalItems] : [originalItems, otherItems]
+      const beforeIssues = entryTreeIssues(startup.compose([[{ insert: startup.entries }], ...beforeLayers], () => {}))
+      for (const [id, count] of entryTreeIssues(composed)) {
+        if (changed.has(id) || count > (beforeIssues.get(id) ?? 0)) invalid.push(id)
+        else preexistingInvalid.push(id)
+      }
       for (const entry of entries) {
-        if (changed.has(entry.id) && typeof entry.name === 'string' && !startup.available(entry.name)) invalid.push(entry.id)
+        if (typeof entry.id === 'string' && changed.has(entry.id) && typeof entry.name === 'string' && !startup.available(entry.name)) invalid.push(entry.id)
       }
       for (const id of changed) if (!seen.has(id)) invalid.push(id)
       if (invalid.length > 0) {
@@ -195,13 +208,43 @@ export class DshPatchFileFacade implements PatchFileFacade {
 
     await atomicWriteFile(p, text)
     this.chainCache.invalidate()
-    return { downgraded }
+    return { downgraded, ...(preexistingInvalid.length > 0 ? { preexistingInvalid } : {}) }
   }
 
   private readonly chainCache = new PatchChainCache(2000)
 
   async readPatchChain(): Promise<PatchChainRead> {
-    return this.chainCache.get(() => readPatchChainFromProfile(this.homeDir, this.profile))
+    return this.chainCache.get(async () => {
+      const startup = await this.readStartup?.()
+      const bundles = startup?.bundleLayers === undefined ? undefined : {
+        sources: startup.bundleLayers.map((layer) => ({ file: `bundles:${layer.name}`, doc: layer.patches })),
+        failures: startup.bundleFailures ?? [],
+      }
+      return readPatchChainFromProfile(this.homeDir, this.profile, bundles)
+    })
+  }
+
+  async reconcileBundles(apply: boolean): Promise<BundleReconciliation> {
+    const startup = await this.readStartup?.()
+    if (startup?.bundleLayers === undefined) return { removed: [] }
+    const p = resolve(this.homeDir, 'profiles', this.profile, 'package.json')
+    let text: string
+    try { text = await fs.readFile(p, 'utf8') } catch (err) {
+      if (isENOENT(err)) return { removed: [] }
+      throw err
+    }
+    const manifest = JSON.parse(text)
+    const names: unknown = manifest?.dsh?.profile?.bundles
+    if (!Array.isArray(names) || !names.every((name) => typeof name === 'string')) return { removed: [] }
+    // Never remove default/inbox layers that were not explicitly declared in this profile.
+    const outcome = reconcileBundleLayers(startup.bundleLayers.filter((layer) => names.includes(layer.name)))
+    if (apply && outcome.removed.length > 0) {
+      const removed = new Set(outcome.removed.map((row) => row.name))
+      manifest.dsh.profile.bundles = names.filter((name) => !removed.has(name))
+      await atomicWriteFile(p, JSON.stringify(manifest, null, 2) + '\n')
+      this.chainCache.invalidate()
+    }
+    return outcome
   }
 
   private async readPatchChainQuietly(): Promise<PatchChainRead | null> {

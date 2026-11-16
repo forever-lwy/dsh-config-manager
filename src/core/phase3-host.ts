@@ -26,6 +26,15 @@ import type { JournalStepRecord } from './types.ts';
 import { engineMsg } from './messages-core.ts';
 import { isLocalOnlyExternalFailure } from './external-failure.ts';
 
+/** A durable commit can contain unapplied steps; it must not claim full validation. */
+function stepValidation(journal: OperationJournal): { validated: boolean; validationWarnings: string[] } {
+  const incomplete = Object.entries(journal.steps).filter(([, step]) => step.status === 'attention' || step.status === 'planned');
+  return {
+    validated: incomplete.length === 0,
+    validationWarnings: incomplete.map(([id, step]) => redactJournalText(step.message ? `${id}: ${step.message}` : id)),
+  };
+}
+
 /** 存在未收敛的 active transaction → 拒绝创建第二个（active≤1）。 */
 export class TransactionRecoveryRequiredError extends Error {
   constructor(opId: string) {
@@ -433,7 +442,7 @@ export class Phase3Recovery {
         if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
         if (next.state === 'APPLYING') next = transitionJournalState(next, 'VALIDATING');
         next = transitionJournalState(next, 'COMMITTED');
-        return { ...next, commit: { at: new Date().toISOString(), validated: true, validationWarnings: [] } };
+        return { ...next, commit: { at: new Date().toISOString(), ...stepValidation(next) } };
       });
       terminalPersistAttempted = true;
       await this.store.moveToCompleted(opId).catch(() => undefined);
@@ -645,7 +654,7 @@ export class Phase3Recovery {
         if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
         if (next.state === 'APPLYING') next = transitionJournalState(next, 'VALIDATING');
         next = transitionJournalState(next, 'COMMITTED');
-        return { ...next, commit: { at: new Date().toISOString(), validated: true, validationWarnings: [] } };
+        return { ...next, commit: { at: new Date().toISOString(), ...stepValidation(next) } };
       });
       await this.store.moveToCompleted(opId).catch(() => undefined);
       return { operationId: opId, result };

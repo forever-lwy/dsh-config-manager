@@ -260,6 +260,7 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 | push 成功 | → 本次快照 id | 同时写 `ancestorId`（未加密时）与各分区 hash |
 | push 被前置检查拒绝 | **不动** | 不 upload、不改 `sections`/`lastSyncAt` |
 | apply/合并**失败**（含整体回滚） | **不动** | 失败不是「部分成功」 |
+| apply/合并 `ok:true` 但有 `ineffective` 未生效项 | **不动** | 保留全部分区 hash、祖先副本及待裁决状态；已成功的写入保留，下次仍可重试同一远端快照 |
 | apply/合并成功但**仍有未裁决冲突**（或用户 `action='skip'`） | **不动**，并写 `pendingMerge` | 未裁决冲突下一轮必须重新出现，绝不静默丢一侧改动 |
 | 全部裁决完且应用成功 | → 本次远端快照 id，清空 `pendingMerge` | |
 | push 有分区仍在等裁决（`skipSections` 扣下） | **只记已推分区**，被扣分区保持原 hash | 被扣分区不算「已同步」，下一轮照旧需要裁决 |
@@ -269,6 +270,10 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
   revision 这类派生字段（真机 settings 即如此），拿 merged 载荷记基线会让下一轮把「只有派生字段不同」
   判成双侧改动 → 每轮重复冲突、无法收敛。重新导出失败时**不推进基线**并如实告警
   （引擎消息键 `sync.baselineRexportFailed`）。
+- `ImportResult.ok` 仍表示非致命执行完成；`ineffective` 表示未应用的步骤，不自动触发整体回滚。
+  手动导入/同步历史在此情形记 `pending`，自动同步记 `partial` 并跳过本轮上行。
+  生产事务仍可进入 durable `COMMITTED`，但含 `attention` 或未完成步骤时，
+  `commit.validated=false`，`commit.validationWarnings` 保留步骤 id 与脱敏原因。
 - `ancestor` 目录（本地祖先副本）是**可缺失**的：加密快照不发明文副本、副本会被裁剪 —— 缺失时退化为
   两方合并（所有双侧差异呈现为 `conflict`），**绝不上抛成整轮失败**。
 - `pendingMerge` 记录 `{ remoteSnapshotId, sections, since }`（同一远端快照上的连续待裁决保留首次时间）。

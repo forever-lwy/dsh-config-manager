@@ -26,7 +26,7 @@ import { findPatchKeyHazards } from '../utils/patch-yaml.ts';
 import { patchKeyHazardMessage } from './patch-key-guard.ts';
 import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
-import { alignOverrideNames, providedByOtherLayers, readPatchChainIndex } from '../core/patch-chain.ts';
+import { alignOverrideNames, patchWriteWarnings, providedByOtherLayers, readPatchChainIndex } from '../core/patch-chain.ts';
 import { applyPatchSecretGuard } from '../core/patch-secret-guard.ts';
 import { PatchStartupInvalidError } from '../core/patch-document.ts';
 import { stripMcpEntries } from './mcp.ts';
@@ -771,7 +771,26 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         message: msg('adapter.pluginHostBundleWriteFailed', { name, reason: err instanceof Error ? err.message : String(err) }),
       };
     }
-    return { ok: true, needsRestart: true, message: msg('adapter.pluginHostBundleDeclared', { name }) };
+    const reconciled = await this.reconcileBundles(ctx);
+    if (!reconciled.ok) return { ...reconciled, needsRestart: true };
+    return { ok: true, needsRestart: true, message: [msg('adapter.pluginHostBundleDeclared', { name }), reconciled.message].filter(Boolean).join(msg('adapter.patchNotesJoin')) };
+  }
+
+  private async reconcileBundles(ctx: ImportContext): Promise<ApplyResult> {
+    try {
+      const outcome = await ctx.target.patchFile.reconcileBundles?.(true);
+      return {
+        ok: true,
+        needsRestart: (outcome?.removed.length ?? 0) > 0,
+        ...(outcome?.removed.length ? { message: ctx.msg('adapter.pluginBundlesReconciled', {
+          names: outcome.removed.map((row) => `${row.name} → ${row.coveredBy}`).join(', '),
+        }) } : {}),
+      };
+    } catch (err) {
+      return { ok: false, warning: true, message: ctx.msg('adapter.pluginBundlesReconcileFailed', {
+        reason: err instanceof Error ? err.message : String(err),
+      }) };
+    }
   }
 
   async analyzeImport(data: PluginsSection, ctx: ImportContext): Promise<PlanItem[]> {
@@ -873,6 +892,22 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
           adapter: 'plugins',
           description: msg('adapter.pwPatchesUnsupported', { line: clean.unsupported }),
           severity: 'warning',
+        });
+      }
+    }
+
+    // Reconcile inside the snapshotted import, before this adapter's patch writes.
+    if (ctx.target.patchFile.reconcileBundles !== undefined) {
+      try {
+        const overlap = await ctx.target.patchFile.reconcileBundles(false);
+        if (overlap.removed.length > 0) items.push({
+          id: 'plugins:bundle-reconcile', kind: 'Update', adapter: 'plugins',
+          description: msg('adapter.pluginBundlesReconcile', { names: overlap.removed.map((row) => `${row.name} → ${row.coveredBy}`).join(', ') }),
+          severity: 'info', target: { adapter: 'plugins', ref: PLUGIN_PROFILE_MANIFEST_REF },
+        });
+      } catch (err) {
+        items.push({ id: 'plugins:bundle-reconcile-unavailable', kind: 'Warning', adapter: 'plugins', severity: 'warning',
+          description: msg('adapter.pluginBundlesReconcileFailed', { reason: err instanceof Error ? err.message : String(err) }),
         });
       }
     }
@@ -1029,6 +1064,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
     const msg = ctx.msg;
+    if (item.id === 'plugins:bundle-reconcile') return this.reconcileBundles(ctx);
     // pnpm-workspace.yaml：插件安装的 pnpm 配置（allowBuilds / minimumReleaseAgeExclude），
     // 必须先于任何插件安装写入，pnpm add 时才能生效。失败为非致命 warning。
     // issue #35：patch 文件项（写入 profile 的 patches/ 目录；同时进入导入前快照，可回滚）
@@ -1168,7 +1204,9 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
             ok: false,
             warning: true,
             needsRestart: true,
-            message: msg('adapter.pluginVersionMismatch', {
+            message: classifyPluginSpec(entry?.spec) === 'git' && tarballPath === undefined
+              ? msg('adapter.pluginGitVersionMismatch', { name, expected, actual })
+              : msg('adapter.pluginVersionMismatch', {
               name,
               expected,
               actual,
@@ -1262,11 +1300,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     }
     // 一次写入可能同时命中多件事（被降级 + 保留/清空了密钥字段），**必须并列报**：
     // 早退会让 #136 A 的安全告警静默消失，用户以为导入已经覆盖了密钥值。
-    const notes: string[] = [];
-    if (outcome && outcome.downgraded.length > 0) {
-      // issue #144 兜底：门面发现该 id 已被别的层提供、把 insert 降级成覆盖行 → 说明实际写了哪种形状
-      notes.push(msg('adapter.patchLineDowngraded', { ids: outcome.downgraded.join(', ') }));
-    }
+    const notes = outcome ? patchWriteWarnings(outcome, msg) : [];
     // 告警只报行 id 与字段路径，绝不带值（值本身就是密钥）
     // 报告面用**计划项 id**（`patch:<lineId>`）而不是裸 lineId：报告与计划项要能逐条对上
     if (guard.kept.length > 0) {

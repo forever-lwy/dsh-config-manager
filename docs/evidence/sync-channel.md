@@ -3,6 +3,33 @@
 > 本文件是**经验/证据**：真机事故、量化数据、复现与复核脚本；**规则本体在 `AGENTS.md`**（对应小节读取）。
 > 条目结构：每个 `###` 是原 `AGENTS.md` 的一条完整条目（逐字搬迁，未改写）。域 → 规则 的对应表见 `docs/evidence/README.md`。
 
+## 桌面端同步配置遗漏（0.10.2）
+
+- 复核基线为 DSH `0.2.2-rc.3`。此前写前检查把整个启动树的既存重复项算到每次写入上，
+  并用 `resolveBundleDir` 判断模块可用性、只检查顶层 id，分别误拦无关配置、导出子模块和分组条目。
+- 已发布的 `@deepseek-ai/dsh-experimental-forge-bundle@0.2.2-rc.3` 的 patch 是纯根 insert，
+  完整包含独立 worktree bundle 的两条相同插入。仅在两层都是纯 insert 且整行深相等时，
+  删除被完整覆盖的声明；不同配置、额外条目、顺序指令、未知形态均保留。
+  清理在导入计划里显式出现，profile `package.json` 进入导入前快照，回滚逐字节恢复原文件。
+- 模块校验使用宿主 `resolvePluginResource`；仅在普通 Node 缺少宿主 resolver 时回退到
+  `createRequire`，不执行插件代码。分组遍历只沿 `group: true` 的 `config` 数组递归，
+  不把普通业务配置数组误当插件行。宿主已加载的 bundle 也进入读取索引，兼容安装位置中的内置层。
+- 写前比较原树与候选树：既存且未触及的问题单独告警，无关合法写入继续；新增、加重或本次
+  正在修改的无效条目仍拒写，并保持原文件字节不变。这也覆盖先于插件分区执行的 MCP/提示词写入。
+- 非致命失败保持 `ok:true` 的既有语义，但有 `ineffective` 时不推进任何同步基线字段；
+  手动历史为 `pending`，自动历史为 `partial`，自动同步跳过本轮上行。事务可 durable commit，
+  但 attention/planned 步骤会使 `commit.validated=false`，保留脱敏原因。
+- Git 默认分支可能已升级，安装结果与旧快照版本不同会明确提示；不把来源改成 npm，
+  不自动固定 ref 或降级。未勾选的插件私有文件/资源仍不导出，也不猜测或生成其内容。
+
+验证：`src/utils/dsh-sync-integrity.test.ts` 用 rc.3 官方合并器同时覆盖 15 类遗漏配置、
+模式与子代理子模块、Mnemon 分组、重复 bundle、新声明时的合并、真实 ZIP 导入和清单回滚；
+`src/sync/sync-engine.test.ts`、`autosync-scheduler.test.ts` 与
+`src/core/phase3-production-integration.test.ts` 覆盖基线、上行与持久日志。
+这些测试证明补丁与执行状态的处理，不代替 Windows 桌面 UI、外部模型接口或未选私有文件的实测。
+全量验证同时复现了已有缓存边界用例的时间戳舍入：100 次 `utimes`/`stat` 有 50 次提前
+0.0009765625 毫秒。该用例改用磁盘实际 mtime 构造等值边界；生产清理判据保持严格 `>`。
+
 ## 同步分区目录含显式可选项（issue #78 起是「逐分区放行」而不是布尔）
 
 - **同步分区目录含显式可选项（issue #78 起是「逐分区放行」而不是布尔）**：`syncSectionCatalog` = portable + `OPT_IN_SYNC_SECTIONS`（**注册表派生** = `SectionMeta.syncOptIn !== 'off'`，当前 `mcp` / `workspaces` / `sessions`）。可选分区**永不默认进入同步通道**，放行只看引擎构造期的 `optInSections: readonly SectionId[]`（`pullSectionIds()` 决定远端快照里哪些分区进临时 ZIP；`pushTargets()` 决定哪些能上榜）——**绝不用布尔**：布尔会退化成「勾了 mcp 连带放行 sessions」（`sync-engine.test.ts` 有推/拉两条回归）。宿主按驱动方决定传什么：**手动** push/pull / 一键同步传「持久化选择 ∩ OPT_IN_SYNC_SECTIONS」，**自动同步**与 model-tools 只传 `'auto'` 档（`AUTO_SYNC_OPT_IN_SECTIONS`，当前 = mcp）—— sessions（`'manual'`）绝不悄悄上行/下行。`opts.sessions = { limit }` 只是 sessions 的**导出参数**（带哪几个对话），不再兼任开关。

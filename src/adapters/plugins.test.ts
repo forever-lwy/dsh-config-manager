@@ -441,6 +441,26 @@ test('plugins: 安装后回读版本与备份不一致 → warning + 可复制�
 
 /* ---------------- preview：只读预览不得触发任何本地源打包（总览慢的根因） ---------------- */
 
+test('Git default-branch version drift preserves the Git installation source and explains the actual mismatch', async () => {
+  const target = makeContext('linux', '/home/test');
+  let installedTarget = '';
+  target.plugins.install = async (_name, spec) => { installedTarget = spec ?? ''; return { needsRestart: true, installedVersion: '0.11.301' }; };
+  const data: PluginsSection = { version: 1, plugins: [{ name: '@forever-lwy/dsh-image-gen', version: '0.11.103',
+    enabled: true, spec: 'github:forever-lwy/dsh-image-gen', isBundle: true, inBundles: [],
+  }], patch: [] };
+  const adapter = new PluginsAdapter();
+  const ctx = makeImportContext(target, new Map([['plugins', data]]));
+  const item = (await adapter.analyzeImport(data, ctx)).find((entry) => entry.kind === 'Install')!;
+  const result = await adapter.applyItem(item, ctx);
+  assert.equal(installedTarget, 'github:forever-lwy/dsh-image-gen');
+  assert.equal(result.ok, false);
+  assert.equal(result.warning, true);
+  assert.match(result.message ?? '', /0\.11\.301/);
+  assert.match(result.message ?? '', /0\.11\.103/);
+  assert.match(result.message ?? '', /默认分支/);
+  assert.doesNotMatch(result.message ?? '', /npm|add .*@0\.11\.103/);
+});
+
 test('plugins: preview 不调用打包钩子，但条目/白名单/告警与 export 同口径', async () => {
   const src = makeContext('win32', 'C:\\Users\\alice', 'web');
   src.plugins.installed.set('plain-pkg', { name: 'plain-pkg', version: '1.2.3', enabled: true });

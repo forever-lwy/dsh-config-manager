@@ -24,6 +24,18 @@ const DOC = [
   { id: 'top-b', name: '@deepseek-ai/dsh-other' },
 ];
 
+test('group children participate in chain membership without changing root layout or treating ordinary config arrays as rows', () => {
+  const doc = [{ insert: [{ id: 'mnemon-bundle', group: true, config: [
+    { id: 'mnemon', name: 'dsh-mnemon', config: { sources: [{ id: 'not-a-row' }] } },
+    { id: 'nested', group: true, config: [{ id: 'runtime', name: 'dsh-mnemon/runtime' }] },
+  ] }] }];
+  assert.deepEqual(patchDocumentEntries(doc).map((row) => row.id), ['mnemon-bundle', 'mnemon', 'nested', 'runtime']);
+  assert.deepEqual(unprovidedTopLevelIds([doc], ['mnemon', 'runtime', 'not-a-row']), ['not-a-row']);
+  assert.deepEqual(describePatchDocument(doc), { insertIds: ['mnemon-bundle'], topLevelIds: [] });
+  const plan = planPatchDocument(doc, []);
+  assert.equal(describePatchLayoutDrift(plan, describePatchDocument(plan.items)), null);
+});
+
 test('#133 insert 块保真：更新一条 insert 成员后仍留在块里，成员集合不变', () => {
   const plan = planPatchDocument(DOC, [
     { lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client', config: { transport: 'stdio', command: 'uvx' } }, action: 'update' },

@@ -42,6 +42,28 @@ async function makeRecovery(dir: string): Promise<Phase3Recovery> {
   return r;
 }
 
+test('partial import commits retain attention evidence without claiming full validation or forcing SAFE MODE', async (t) => {
+  for (const external of [false, true]) {
+    const recovery = await makeRecovery(tmp(t));
+    const fn = async (ctx?: import('./phase3-host.ts').JournalRunContext) => {
+      assert.ok(ctx);
+      await ctx.recordStep({ id: 'patch:mnemon', adapter: 'plugins', kind: 'Update', ref: '',
+        external: true, beforeFp: null, afterFp: null, status: 'attention', message: 'configuration was not applied' });
+      return { ok: true };
+    };
+    const { operationId } = external
+      ? await recovery.runExternalIntent({ operationType: 'autosync-apply', lockCtx: lk(), intent: { adapter: 'sync', ref: 'git', kind: 'Apply' }, fn })
+      : await recovery.runJournaled({ operationType: 'import-apply', lockCtx: lk(), fn });
+    const journal = await recovery.store.load(operationId);
+    assert.equal(journal?.state, 'COMMITTED', 'completed side effects remain durable');
+    assert.equal(journal?.commit.validated, false);
+    assert.ok(journal?.commit.validationWarnings.some((warning) => warning.includes('patch:mnemon')));
+    assert.equal(journal?.steps['patch:mnemon']?.status, 'attention');
+    assert.equal(recovery.safeModeActive, false, 'a known nonfatal rejection is not an interrupted transaction');
+    assert.deepEqual(await recovery.store.scanActive(), []);
+  }
+});
+
 test('P0-A：runJournaled 建 journal（绑定 + operationType + COMMITTED 规整）', async (t) => {
   const dir = tmp(t);
   const recovery = await makeRecovery(dir);

@@ -305,13 +305,15 @@ test('保留期边界：恰好等于保留期 → 不删（超期判定为严格
     const zip = path.join(d.tmpDir, 'upload-boundary.zip');
     await fs.writeFile(zip, Buffer.alloc(3));
     await touch(zip, now - TMP_RETENTION_DEFAULT_MS); // 恰好 = 保留期
+    // utimes may round down by a microsecond; use the actual filesystem precision.
+    const boundaryNow = (await fs.stat(zip)).mtimeMs + TMP_RETENTION_DEFAULT_MS;
 
     const report = await cleanupCaches({
       tmpDir: d.tmpDir,
       exportsDir: d.exportsDir,
       marketCacheRoot: d.marketCacheRoot,
       marketWorkRoot: d.marketWorkRoot,
-      now: () => now,
+      now: () => boundaryNow,
     });
 
     assert.equal(report.removed, 0, '边界文件不删');

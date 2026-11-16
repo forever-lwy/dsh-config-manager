@@ -9,7 +9,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **Release workflow**: on tag push, CI extracts the current version's section as the release notes highlights;
 > the build fails fast if the section is missing, so you cannot forget to update it.
 >
-> **条目落位（按改动性质分组）**：新条目一律先写进 `## [Unreleased]
+> **条目落位（按改动性质分组）**：新条目一律先写进 `## [Unreleased]`。
+
+## [Unreleased]
+
+### 🐛 修复 · Fixed
+
+- **桌面端同步完整性**：合并完全重复的工作区 bundle 声明并保留回滚快照；按宿主实际模块解析校验合法子路径，递归识别分组内的 Mnemon 条目，恢复自定义模式、模型供应商等配置覆盖。既存无关问题不再阻断其他配置，但新增问题仍拒绝写入。
+  **Desktop synchronization**: consolidate fully duplicated worktree bundle declarations with snapshot protection, resolve exported module subpaths, and recognize grouped Mnemon entries so mode and provider overrides take effect. Unrelated existing defects no longer block valid writes; new defects are still rejected.
+- **部分同步结果**：未生效项保留待处理状态、同步基线和远端重试机会；事务日志不再把含 attention 步骤的提交标为完整验证通过，自动同步不再把不完整下行结果回推覆盖远端。Git 来源版本差异明确说明默认分支行为，保留原安装来源。
+  **Partial synchronization results**: unapplied items stay pending without advancing the baseline, committed journals retain incomplete validation, and autosync does not push incomplete downloads over the remote snapshot. Git version differences explain default-branch updates while preserving the installation source.
 
 ## [0.10.1] - 2026-11-16
 

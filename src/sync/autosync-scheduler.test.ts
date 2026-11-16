@@ -863,6 +863,25 @@ test('runOnce(#136)：纯下行（不上传）扣下叶级冲突 → partial(con
   assert.ok(getEntries().some((e) => e.status === 'partial' && e.direction === 'pull'), '历史留 partial');
 });
 
+test('incomplete downlink does not upload the partial local state over the remote snapshot', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let pushed = false;
+  const engine = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({ ok: true, applied: ['settings'] as never, restoreId: 'retryable', rolledBack: false,
+      review: [], warnings: ['mode definition was not applied; baseline preserved'],
+      ineffective: [{ itemId: 'patch:dsh-modes-custom', adapter: 'plugins' }],
+    }),
+    push: async () => { pushed = true; return { ok: true, snapshotId: 'must-not-upload', sections: [] as never, warnings: [] }; },
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(pushed, false);
+  assert.equal(result.status, 'partial');
+  assert.equal(result.skipReason, 'warning');
+  assert.ok(getEntries().some((entry) => entry.status === 'partial'));
+});
+
 test('runOnce(#136)：只有下行告警、没有叶级冲突 → partial(warning)，不冒充 conflict', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const engine = {

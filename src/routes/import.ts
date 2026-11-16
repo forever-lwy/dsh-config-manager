@@ -320,14 +320,14 @@ export function importRoutes(env: RoutesEnv): WebRoute[] {
         )
         const historyError = await tryAppendHistory({
           kind: 'import',
-          result: result.ok ? 'success' : 'failed',
+          result: result.ok ? ((result.ineffective?.length ?? 0) > 0 ? 'pending' : 'success') : 'failed',
           sections: importSections,
           operationId: journalCtx?.operationId,
           snapshotId: result.snapshotId ?? undefined,
           runId,
           source: 'api',
           summary: msg('route.importHistorySummary', { sections: importSections.join(', ') || msg('route.importNoSections'), count: result.executed.length }),
-          error: result.ok ? undefined : msg('route.importIncomplete'),
+          error: result.ok && (result.ineffective?.length ?? 0) === 0 ? undefined : msg('route.importIncomplete'),
         })
         writeJson(res, 200, historyError === undefined ? { ...result, runId } : { ...result, runId, historyWriteError: historyError })
       } catch (error) {
