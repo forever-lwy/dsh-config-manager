@@ -11,7 +11,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **条目落位（按改动性质分组）**：新条目一律先写进 `## [Unreleased]`。
 
-## [Unreleased]
+## [0.10.2] - 2026-11-17
+
+> **修复桌面端配置同步遗漏**：恢复自定义模式、模型供应商与分组插件配置，并如实保留部分同步的结果与重试机会。
+>
+> **Theme**: restore desktop mode, provider and grouped plugin configuration, with accurate partial-sync reporting and retryable baselines.
 
 ### 🐛 修复 · Fixed
 
