@@ -12,6 +12,7 @@ import type { MergePlan } from './merge.ts';
 import type { MergePreview } from './merge-preview-view.ts';
 export type { MergePreview, MergePreviewConflictView, MergePreviewSectionView } from './merge-preview-view.ts';
 import type { SyncApplyPlan } from './risk.ts';
+import './sync-engine-messages.ts';
 import type { TransactionSnapshotContext } from '../core/types.ts';
 import type { PlanItemProgress } from '../core/analyzer.ts';
 export interface SyncEngineOptions {
@@ -250,6 +251,8 @@ export interface SyncPreviewResult {
 /** 自动应用执行器（P2b）报告 */
 export interface ApplyReport {
     ok: boolean;
+    /** Nonfatal import failures: durable applied changes are kept, but the baseline is not advanced. */
+    ineffective?: ImportResult['ineffective'];
     /** 实际写入本地的分区 id 列表 */
     applied: string[];
     /** 应用前快照 id（UI 可借此一键回滚）；失败时仍透传以便排查 */

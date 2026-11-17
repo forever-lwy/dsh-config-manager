@@ -735,6 +735,7 @@ export class AutoSyncScheduler {
       // 「叶级冲突被扣下」都表现为一轮干净的成功。
       let downlinkWarnings: string[] = [];
       let heldLeafSections: SectionId[] = [];
+      let downlinkIncomplete = false;
 
       // Phase A: pull 合并（下载）—— 仅当远端有新快照才拉取（§3.2）。
       if (remoteNew) {
@@ -796,6 +797,7 @@ export class AutoSyncScheduler {
               : await rawApply();
             appliedSections = applyReport.applied as SectionId[];
             downlinkWarnings = applyReport.warnings;
+            downlinkIncomplete = (applyReport.ineffective?.length ?? 0) > 0;
             heldLeafSections = [...new Set(applyReport.review.map((r) => r.sectionId as SectionId))];
             if (!applyReport.ok) {
               const error = applyReport.warnings.join('; ') || engineMsg('sync.autosyncApplyMergeFailed');
@@ -816,7 +818,7 @@ export class AutoSyncScheduler {
       }
 
       // Phase C: push 上传（完整双向）—— 仅当本地真有改动才上传（§3.1）；startup 变体不上传。
-      if (!opts.startup && localDirty) {
+      if (!opts.startup && localDirty && !downlinkIncomplete) {
         try {
           /**
            * 冲突策略（conflictPolicy，缺省 'ask'）：
@@ -1037,7 +1039,7 @@ export class AutoSyncScheduler {
       const pulledConflicted = [...new Set([...deferredSections, ...heldLeafSections])];
       const pullSkipReason = !degraded && appliedSections.length === 0
         ? ('unchanged' as const)
-        : degraded ? ('conflict' as const) : undefined;
+        : degraded ? (heldLeafSections.length > 0 ? 'conflict' as const : 'warning' as const) : undefined;
       const result: AutosyncRunResult = {
         status: degraded ? 'partial' : 'success', direction: 'pull', appliedSections,
         ...(pullSkipReason !== undefined ? { skipReason: pullSkipReason } : {}),

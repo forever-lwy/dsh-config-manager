@@ -807,6 +807,40 @@ class MockImporter {
   }
 }
 
+test('partial imports preserve the baseline and remote pointer in both manual and merged apply paths', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dcm-partial-baseline-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const ctx = makeContext('win32', 'C:\\Users\\alice');
+  seedSource(ctx);
+  const transport = new MemSyncTransport();
+  const mock = new MockImporter();
+  const originalExecute = mock.executeImpl;
+  const ineffective = [{ itemId: 'patch:dsh-modes-custom', adapter: 'plugins', message: 'mode definition was not applied' }];
+  mock.executeImpl = async () => ({ ...(await originalExecute() as object), ineffective, warnings: ['mode definition was not applied'] });
+  const engine = makeEngineWithMockImporter({ ctx, transport, stateDir: dir, localSnapshotsDir: path.join(dir, 'ancestors'), mockImporter: mock });
+  assert.equal((await engine.push({ snapshotId: 'sync-base' })).ok, true);
+  const baseline = await loadSyncState(dir);
+  const ancestorFiles = await fs.readdir(path.join(dir, 'ancestors'));
+  const remote = mkRemote('sync-partial', '2026-08-16T13:00:00.000Z', 'light', 9);
+  transport.snapshots.set(remote.id, remote);
+  transport.metas.push(computeSnapshotMeta(remote));
+  const zip = path.join(dir, 'manual.zip');
+  await fs.writeFile(zip, 'mock zip');
+  const manual = await engine.applyItems(zip, makeImportPlan('partial'), { remoteSnapshotId: remote.id });
+  assert.equal(manual.ok, true, 'nonfatal failures keep applied changes');
+  assert.equal(manual.rolledBack, false);
+  assert.deepEqual(manual.ineffective, ineffective);
+  assert.deepEqual(await loadSyncState(dir), baseline, 'manual apply must not acknowledge an incomplete snapshot');
+  const plan = buildAutoApplyPlan(await engine.merge());
+  assert.ok(plan.autoApply.length > 0);
+  const merged = await engine.applyMergePlan(plan);
+  assert.equal(merged.ok, true);
+  assert.deepEqual(merged.ineffective, ineffective);
+  assert.deepEqual(await loadSyncState(dir), baseline, 'merged apply must preserve hashes, ancestor and pending merge state');
+  assert.deepEqual(await fs.readdir(path.join(dir, 'ancestors')), ancestorFiles);
+  assert.equal(await engine.hasNewRemoteSnapshot(), true, 'the same remote snapshot remains available to retry');
+});
+
 function makeEngineWithMockImporter(opts: {
   ctx: ReturnType<typeof makeContext>;
   transport: MemSyncTransport;

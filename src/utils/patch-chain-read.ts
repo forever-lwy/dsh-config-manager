@@ -107,10 +107,14 @@ export function downgradeProvidedInserts<T extends PatchChangeLike>(
 }
 
 /** 读整条生效链：bundle 层按声明顺序在前，其后 profile 层、home 层（与宿主合并序一致）。 */
-export async function readPatchChainFromProfile(homeDir: string, profile: string): Promise<PatchChainRead> {
+export async function readPatchChainFromProfile(homeDir: string, profile: string, bundles?: PatchChainRead): Promise<PatchChainRead> {
   const sources: PatchChainSource[] = []
   const failures: { file: string; reason: string }[] = []
-  sources.push(...await readBundleLayerSources(homeDir, profile, failures))
+  if (bundles === undefined) sources.push(...await readBundleLayerSources(homeDir, profile, failures))
+  else {
+    sources.push(...bundles.sources)
+    failures.push(...bundles.failures)
+  }
   for (const file of [profilePatchRel(profile), USER_PATCH_FILE]) {
     try {
       sources.push({ file, doc: loadPatchDocument(await fs.readFile(resolve(homeDir, file), 'utf8')) })

@@ -41,7 +41,7 @@ export declare function downgradeProvidedInserts<T extends PatchChangeLike>(chai
     downgraded: string[];
 };
 /** 读整条生效链：bundle 层按声明顺序在前，其后 profile 层、home 层（与宿主合并序一致）。 */
-export declare function readPatchChainFromProfile(homeDir: string, profile: string): Promise<PatchChainRead>;
+export declare function readPatchChainFromProfile(homeDir: string, profile: string, bundles?: PatchChainRead): Promise<PatchChainRead>;
 /**
  * 读既有 patch 文件并解析：真不存在（ENOENT）或内容为空 → `undefined`。
  *

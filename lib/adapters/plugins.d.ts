@@ -101,6 +101,7 @@ export declare class PluginsAdapter implements ConfigAdapter<PluginsSection> {
      * → 新建会话 service-unavailable。声明不了时只报非致命 warning（§34.17），不拖垮其余配置。
      */
     private declareHostBundle;
+    private reconcileBundles;
     analyzeImport(data: PluginsSection, ctx: ImportContext): Promise<PlanItem[]>;
     applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult>;
     validate(data: PluginsSection, msg?: MsgFunc): Promise<ValidationResult>;

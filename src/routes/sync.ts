@@ -1079,7 +1079,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         }
         const historyError = await tryAppendHistory({
           kind: 'sync-apply',
-          result: report.ok ? 'success' : 'failed',
+          result: report.ok ? (report.ineffective.length > 0 ? 'pending' : 'success') : 'failed',
           sections: Array.isArray(report.applied) ? report.applied.filter((s): s is string => typeof s === 'string') : subItems.map((i) => (i as { adapter?: string }).adapter).filter((s): s is string => typeof s === 'string' && s !== ''),
           operationId: journalCtx?.operationId,
           snapshotId: report.restoreId ?? undefined,

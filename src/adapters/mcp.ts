@@ -24,6 +24,7 @@ import type {
 import { locatePatchLineLayer, readEffectivePatchLines, resolveWriteLayer } from '../core/patch-layers.ts';
 import { findPatchKeyHazards } from '../utils/patch-yaml.ts';
 import { patchKeyHazardMessage } from './patch-key-guard.ts';
+import { patchWriteWarnings } from '../core/patch-chain.ts';
 import {
   MCP_CONNECTOR_STORE_REL, buildConnectorRecord, comparableConnector, exportConnectorBlock,
   findConnectorRecord, mergeConnectorIntoStoreText, pickConnectorKey, readConnectorStore,
@@ -495,11 +496,11 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
     ]);
     // issue #144：门面会把「该 id 已由别的层提供」的 insert 降级成覆盖行 —— 写入者必须报出来，
     // 否则落盘形状变了而报告显示一切照旧（out-of-scope 的是「为 mcp 单独设计形状」，不是静默）。
-    const downgraded = outcome.downgraded.length > 0;
+    const notes = patchWriteWarnings(outcome, msg);
     return {
-      ok: true, warning: downgraded, needsRestart: true,
+      ok: true, warning: notes.length > 0, needsRestart: true,
       message: msg('adapter.mcpWritten', { serverName })
-        + (downgraded ? ' ' + msg('adapter.patchLineDowngraded', { ids: outcome.downgraded.join(', ') }) : ''),
+        + (notes.length > 0 ? ' ' + notes.join(' ') : ''),
     };
   }
 

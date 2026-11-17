@@ -76,7 +76,7 @@ export declare const name = "config-manager";
 /** Services required before the engine can mount (present in every profile). */
 export declare const inject: string[];
 /** Plugin version, kept in sync with package.json ("version"). */
-export declare const PLUGIN_VERSION = "0.10.1";
+export declare const PLUGIN_VERSION = "0.10.2";
 /**
  * Star 引导弹窗指向的 GitHub 仓库（用户引导点 Star 的目标）。
  * 与 package.json 的 repository 字段保持一致；界面不可改（硬编码，参照

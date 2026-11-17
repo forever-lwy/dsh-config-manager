@@ -402,6 +402,8 @@ export interface PatchChange {
     action: 'insert' | 'update' | 'remove';
 }
 export interface PatchFileFacade {
+    /** Preview/apply removal of bundle declarations whose inserts are fully duplicated by another bundle. */
+    reconcileBundles?(apply: boolean): Promise<import('./bundle-reconciliation.ts').BundleReconciliation>;
     readPatchLines(file: string): Promise<{
         lineId: string;
         raw: unknown;

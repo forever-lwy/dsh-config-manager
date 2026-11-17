@@ -398,6 +398,8 @@ export interface SessionMoveResult {
 export interface PatchChange { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove'; }
 
 export interface PatchFileFacade {
+  /** Preview/apply removal of bundle declarations whose inserts are fully duplicated by another bundle. */
+  reconcileBundles?(apply: boolean): Promise<import('./bundle-reconciliation.ts').BundleReconciliation>;
   readPatchLines(file: string): Promise<{ lineId: string; raw: unknown; operation?: 'insert' | 'update' }[]>;
   /**
    * 写回一层 patch 并返回本次的降级记录（issue #144）。

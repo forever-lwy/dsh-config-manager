@@ -60,7 +60,7 @@ export interface PatchDocumentEntry {
     inInsert: boolean;
 }
 /** 读出文档里的全部条目（不判重、保持文档顺序）。 */
-export declare function patchDocumentEntries(doc: unknown): PatchDocumentEntry[];
+export declare function patchDocumentEntries(doc: unknown, recursive?: boolean): PatchDocumentEntry[];
 /** 读出文档里的 insert 成员 id 与顶层行 id（自检与测试共用；不判重、保持文档顺序）。 */
 export declare function describePatchDocument(doc: unknown): {
     insertIds: string[];

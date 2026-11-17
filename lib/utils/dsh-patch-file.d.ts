@@ -1,7 +1,10 @@
 import type { PatchFileFacade } from '../core/types.ts';
 import { type MsgFunc } from '../core/messages.ts';
+import { type BundlePatchLayer, type BundleReconciliation } from '../core/bundle-reconciliation.ts';
 import { type PatchChainRead, type PatchWriteOutcome } from '../core/patch-chain.ts';
 export interface PatchStartupView {
+    bundleLayers?: BundlePatchLayer[];
+    bundleFailures?: PatchChainRead['failures'];
     entries: {
         id: string;
         name?: unknown;
@@ -34,6 +37,7 @@ export declare class DshPatchFileFacade implements PatchFileFacade {
     }[]): Promise<PatchWriteOutcome>;
     private readonly chainCache;
     readPatchChain(): Promise<PatchChainRead>;
+    reconcileBundles(apply: boolean): Promise<BundleReconciliation>;
     private readPatchChainQuietly;
     /** Missing sibling layers are empty; a required startup audit refuses unreadable layers. */
     private readPatchDocQuietly;

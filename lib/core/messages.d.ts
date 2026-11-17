@@ -279,6 +279,11 @@ export declare const zh: {
     readonly 'adapter.pluginUpdateTriggered': '插件 {name} 已触发更新（npm 最新版）{suffix}';
     readonly 'adapter.pluginInstalledAtVersion': '插件 {name} 已安装到 {version}{suffix}';
     readonly 'adapter.pluginVersionMismatch': '插件 {name} 安装后版本为 {actual}，与备份记录的 {expected} 不一致（该版本可能已从 npm 撤版）；可手动执行：{command}';
+    readonly 'adapter.pluginGitVersionMismatch': '插件 {name} 按 Git 来源安装为 {actual}，备份版本为 {expected}。未固定 ref 的来源会跟随仓库默认分支；请核对版本差异后验证功能。';
+    readonly 'adapter.pluginBundlesReconcile': '合并完全重复的插件层声明：{names}';
+    readonly 'adapter.pluginBundlesReconciled': '已合并完全重复的插件层声明：{names}';
+    readonly 'adapter.pluginBundlesReconcileFailed': '无法检查或合并重复插件层声明：{reason}';
+    readonly 'adapter.patchExistingInvalid': '启动配置原有问题仍需处理（{ids}）；本次无关配置已写入，未增加这些问题。';
     readonly 'adapter.skillBundledSkipped': '技能 {name} 由插件内置提供（bundled），备份里的副本不完整，已跳过；升级对应插件即可获得最新版本';
     readonly 'adapter.pluginRestartSuffix': '，重启 dsh 后生效';
     readonly 'adapter.pluginHostBundleDeclare': '声明插件层 {name}（由 DSH 自带提供，不安装）';

@@ -1,3 +1,4 @@
+import type { MsgFunc } from './messages.ts';
 /** 生效链上的一层：层身份 + 已解析的文档。 */
 export interface PatchChainSource {
     /**
@@ -36,7 +37,11 @@ export interface PatchWriteOutcome {
      * （issue #144 的存量修复；正常路径在计划阶段就已判定，这里只是最后一道兜底）。
      */
     downgraded: string[];
+    /** Untouched defects already present before this write; no new defect is permitted. */
+    preexistingInvalid?: string[];
 }
+/** All patch adapters report shape changes and untouched startup defects consistently. */
+export declare function patchWriteWarnings(outcome: PatchWriteOutcome, msg: MsgFunc): string[];
 /** 把整条链折成 id → 层/形态索引（顺序 = 宿主合并序，先出现者优先记 name）。 */
 export declare function patchChainIndex(read: PatchChainRead): Map<string, PatchChainEntry>;
 /** 链上「**本文件之外**的层」提供的 id（写这一层时的判据）。 */
